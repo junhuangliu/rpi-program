@@ -19,9 +19,11 @@
 
 - GitHub 加速：使用 dev-sidecar（sudo dss start），验证命令详情见项目 note.txt
 - 日志体系：项目内自管理，daily 日志在 `instruction/daily/YYYY-MM-DD.md`，规则见 `instruction/LOG.md`
+- 雷达串口权限：已配置 `/etc/udev/rules.d/rplidar.rules`（匹配 10c4:ea60，`MODE:=0777`）。若 `/dev/ttyUSB0` 权限异常（非 777），重插 USB 或执行 `sudo udevadm control --reload-rules && sudo udevadm trigger` 使其生效
 
 ## 约定
 
 - 回答默认使用中文（除非用户明确要求其他语言）
+- 定义函数必须在之前注释功能和用法
 - 未明确要求时不主动执行 git 提交/推送
 - 用户的行为规则写在文件中（AGENTS.md、note.txt 等），遵循这些约定

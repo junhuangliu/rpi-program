@@ -1,0 +1,27 @@
+# MEMORY.md - 项目长期记忆
+
+本文件存放跨会话的项目关键事实、决策与偏好。此文件为项目内自管理，路径：`<项目根>/MEMORY.md`。
+
+## 项目信息
+
+- 项目：rpi-program（树莓派编程项目，位于 ~/Desktop/rpi-program）
+- 技术栈：ROS（机器人操作系统）+ Python
+- 身份约定：协助者 wcq，用户 ljy
+
+## 外设硬件
+
+- RPLIDAR_C1M1 激光雷达
+- OpenMV 摄像头
+- 扫码模块
+- USB 外接串口等
+
+## 技术知识
+
+- GitHub 加速：使用 dev-sidecar（sudo dss start），验证命令详情见项目 note.txt
+- 日志体系：项目内自管理，daily 日志在 `instruction/daily/YYYY-MM-DD.md`，规则见 `instruction/LOG.md`
+
+## 约定
+
+- 回答默认使用中文（除非用户明确要求其他语言）
+- 未明确要求时不主动执行 git 提交/推送
+- 用户的行为规则写在文件中（AGENTS.md、note.txt 等），遵循这些约定

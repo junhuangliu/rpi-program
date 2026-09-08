@@ -1,0 +1,4 @@
+#开启github加速
+	sudo dss start
+#验证成功性
+	curl -I -x http://127.0.0.1:31180 https://github.com

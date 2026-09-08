@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""手持式 2D 激光 SLAM（建图 + 定位）。
+
+启动 slam_launch.py，一次性拉起：
+  雷达驱动 -> 激光里程计 -> slam_toolbox -> rviz2
+
+说明：
+  - 需要 slam_toolbox（apt 安装）、ros2_laser_scan_matcher（源码编译）
+  - 手持缓慢移动雷达即可边建图边定位
+"""
+
+import glob
+import os
+import subprocess
+import sys
+
+ROS_SETUP = os.path.expanduser("~/ros2_ws/install/setup.bash")
+LAUNCH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "slam_launch.py")
+SERIAL_PATTERNS = ("/dev/ttyUSB*", "/dev/ttyACM*")
+
+
+def run(cmd: str, check: bool = True) -> None:
+    print(f"\n>>> {cmd}")
+    subprocess.run(["bash", "-c", cmd], check=check)
+
+
+def ros_env_prefix() -> str:
+    if not os.path.exists(ROS_SETUP):
+        print(f"[警告] 未找到 {ROS_SETUP}，若 ROS 环境已全局生效可忽略")
+        return ""
+    return f"source {ROS_SETUP} && "
+
+
+def find_lidar_port() -> str | None:
+    ports = sorted(
+        set(p for pattern in SERIAL_PATTERNS for p in glob.glob(pattern))
+    )
+    if not ports:
+        print("[错误] 未检测到雷达串口设备，请确认雷达 USB 线已连接")
+        return None
+    print(f"[OK] 检测到串口设备: {', '.join(ports)}")
+    return ports[0]
+
+
+def main() -> None:
+    port = find_lidar_port()
+    if port is None:
+        sys.exit(1)
+
+    launch = (f"{ros_env_prefix()}ros2 launch {LAUNCH_FILE} "
+              f"serial_port:={port}")
+    run(launch)
+
+
+if __name__ == "__main__":
+    main()

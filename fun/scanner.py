@@ -10,20 +10,20 @@
   python3 start.py scanner [-p/--port /dev/ttyACM0] [-b/--baudrate <速率>]
 
 说明：
-  - 默认自动探测 /dev/ttyACM*（只扫 ttyACM，避免占用雷达的 /dev/ttyUSB0）
-  - 端口可用 -p 参数显式指定
-  - 波特率默认为 115200，编码为 GBK（扫码枪出厂串口参数）；可用 -b 指定其他速率
+- 默认自动探测扫码枪串口（通过 /dev/serial/by-id 稳定识别，区分雷达）
+- 端口可用 -p 参数显式指定
+- 波特率默认为 115200，编码为 GBK（扫码枪出厂串口参数）；可用 -b 指定其他速率
 """
 
 import argparse
-import glob
 import os
 import sys
 import time
 
 import serial
 
-SERIAL_PATTERNS = ("/dev/ttyACM*",)
+from fun import serial_ports
+
 DEFAULT_BAUDRATE = 115200
 BARCODE_ENCODING = "gbk"
 TOPIC = "scanner/barcode"
@@ -37,17 +37,6 @@ try:
     _ROS_ERR = None
 except ModuleNotFoundError as e:
     _ROS_ERR = e
-
-
-def find_scanner_port() -> str | None:
-    """自动探测扫码枪串口：返回 /dev/ttyACM* 中最新端口，未发现返回 None。"""
-    ports = sorted(set(p for pattern in SERIAL_PATTERNS for p in glob.glob(pattern)))
-    if not ports:
-        print("[错误] 未检测到扫码枪串口(/dev/ttyACM*)")
-        print("      请确认扫码枪已切换到 USB 串口模式并重新插拔")
-        return None
-    print(f"[OK] 检测到扫码枪串口: {', '.join(ports)}")
-    return ports[-1]
 
 
 def main() -> None:
@@ -98,7 +87,7 @@ def main() -> None:
     parser.add_argument("-b", "--baudrate", type=int, default=DEFAULT_BAUDRATE, help="波特率(默认 115200)")
     args, _ = parser.parse_known_args()
 
-    port = args.port or find_scanner_port()
+    port = args.port or serial_ports.find_scanner_port()
     if port is None:
         sys.exit(1)
 

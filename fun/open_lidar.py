@@ -3,21 +3,21 @@
 
 将以下手工步骤统一封装为一个 Python 脚本：
   1. 加载 ROS 工作空间环境变量
-  2. 自动检测雷达串口设备（/dev/ttyUSB* 或 /dev/ttyACM*）
+  2. 自动检测雷达串口设备（通过 /dev/serial/by-id 稳定识别，区分扫码枪）
   3. 启动 RPLIDAR C1 显示节点（自动打开 rviz2）
 
 说明：串口权限通过将用户加入 dialout 组解决，无需每次授权。
 """
 
-import glob
 import os
 import subprocess
 import sys
 
+from fun import serial_ports
+
 ROS_SETUP = os.path.expanduser("~/ros2_ws/install/setup.bash")
 LIDAR_LAUNCH = "view_rplidar_c1_launch.py"
 LIDAR_PKG = "rplidar_ros"
-SERIAL_PATTERNS = ("/dev/ttyUSB*", "/dev/ttyACM*")
 
 
 def run(cmd: str, check: bool = True) -> None:
@@ -32,19 +32,8 @@ def ros_env_prefix() -> str:
     return f"source {ROS_SETUP} && "
 
 
-def find_lidar_port() -> str | None:
-    ports = sorted(
-        set(p for pattern in SERIAL_PATTERNS for p in glob.glob(pattern))
-    )
-    if not ports:
-        print("[错误] 未检测到雷达串口设备，请确认雷达 USB 线已连接")
-        return None
-    print(f"[OK] 检测到串口设备: {', '.join(ports)}")
-    return ports[0]
-
-
 def main() -> None:
-    port = find_lidar_port()
+    port = serial_ports.find_lidar_port()
     if port is None:
         sys.exit(1)
 

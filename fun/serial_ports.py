@@ -8,6 +8,7 @@
 识别约定：
   - 雷达   RPLIDAR C1：CP210x（Silicon_Labs），PID ea60
   - 扫码枪 BF SCAN：   链接名含 "BF_SCAN"，VID 9901
+  - OpenMV 摄像头：    PYBoard 虚拟串口（MicroPython），VID 37c5
 """
 
 import glob
@@ -17,6 +18,8 @@ LIDAR_KEYWORDS = ("Silicon_Labs", "CP210")
 LIDAR_PID = "ea60"
 SCANNER_KEYWORDS = ("BF_SCAN",)
 SCANNER_VID = "9901"
+OPENMV_KEYWORDS = ("MicroPython",)
+OPENMV_VID = "37c5"
 
 
 def by_id_ports() -> dict[str, str]:
@@ -93,6 +96,12 @@ def find_scanner_port() -> str | None:
     return find_port(SCANNER_KEYWORDS, vid=SCANNER_VID, label="扫码枪")
 
 
+def find_openmv_port() -> str | None:
+    """返回 OpenMV 摄像头串口；未找到返回 None。"""
+    return find_port(OPENMV_KEYWORDS, vid=OPENMV_VID, label="OpenMV")
+
+
 if __name__ == "__main__":
     find_lidar_port()
     find_scanner_port()
+    find_openmv_port()

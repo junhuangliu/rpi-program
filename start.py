@@ -3,12 +3,14 @@
 
 import sys
 
-from fun import scanner, open_lidar, slam
+from fun import bridge, camera, scanner, open_lidar, slam
 
 FUNCS = {
     "lidar": open_lidar.main,
     "slam": slam.main,
     "scanner": scanner.main,
+    "camera": camera.main,
+    "bridge": bridge.main,
 }
 
 

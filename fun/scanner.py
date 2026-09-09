@@ -5,9 +5,14 @@
   1. 通过串口（USB 串口/VCP 模式）按行读取扫码枪输出的条码 ASCII 数据
   2. 将条码发布到 ROS2 话题 /scanner/barcode（std_msgs/String）
   3. 终端打印并追加写入 scans.log（每行一条条码）
+  4. 提供 ROS2 Service /scanner/query（std_srvs/srv/Trigger）：
+     上位机随时可调用来获取最近一次扫码内容（缓存）；从未扫过返回 success=false + "NO_SCAN"
 
 用法：
   python3 start.py scanner [-p/--port /dev/ttyACM0] [-b/--baudrate <速率>]
+
+  查询示例：
+    ros2 service call /scanner/query std_srvs/srv/Trigger
 
 说明：
 - 默认自动探测扫码枪串口（通过 /dev/serial/by-id 稳定识别，区分雷达）
@@ -27,12 +32,14 @@ from fun import serial_ports
 DEFAULT_BAUDRATE = 115200
 BARCODE_ENCODING = "gbk"
 TOPIC = "scanner/barcode"
+QUERY_SERVICE = "scanner/query"
 LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scans.log")
 
 try:
     import rclpy
     from rclpy.node import Node
     from std_msgs.msg import String
+    from std_srvs.srv import Trigger
 
     _ROS_ERR = None
 except ModuleNotFoundError as e:
@@ -52,28 +59,42 @@ def main() -> None:
         def __init__(self, port: str, baudrate: int) -> None:
             super().__init__("scanner_node")
             self.pub = self.create_publisher(String, TOPIC, 10)
+            self.last_barcode = ""
+            self.srv = self.create_service(Trigger, QUERY_SERVICE, self.handle_query)
             self.ser = serial.Serial(port, baudrate, timeout=0.2)
             self.get_logger().info(f"串口已打开: {port} @ {baudrate}, 发布话题: /{TOPIC}")
+            self.get_logger().info(f"服务: /{QUERY_SERVICE} (查询最近条码)")
             self.get_logger().info("请扫描条码（Ctrl+C 退出）")
 
         def read_loop(self) -> None:
-            """主循环：串口按行读取；timeout 时返回空串，便于响应 Ctrl+C。"""
+            """主循环：串口按行读取并泵服务回调；timeout 时返回空串。"""
             try:
                 while rclpy.ok():
                     line = self.ser.readline()
-                    if not line:
-                        continue
-                    barcode = line.decode(BARCODE_ENCODING, errors="replace").strip()
-                    if not barcode:
-                        continue
-                    self.handle_barcode(barcode)
+                    if line:
+                        barcode = line.decode(BARCODE_ENCODING, errors="replace").strip()
+                        if barcode:
+                            self.handle_barcode(barcode)
+                    rclpy.spin_once(self, timeout_sec=0.2)
             except serial.SerialException as e:
                 self.get_logger().error(f"串口异常: {e}")
             finally:
                 self.ser.close()
 
+        def handle_query(self, request, response):
+            """查询服务回调：返回最近一次扫码内容。"""
+            if self.last_barcode:
+                response.success = True
+                response.message = self.last_barcode
+            else:
+                response.success = False
+                response.message = "NO_SCAN"
+            self.get_logger().info(f"查询最近条码 -> {response.message} (success={response.success})")
+            return response
+
         def handle_barcode(self, barcode: str) -> None:
-            """处理一条条码：终端打印、追加日志、发布 ROS2 话题。"""
+            """处理一条条码：缓存、终端打印、追加日志、发布 ROS2 话题。"""
+            self.last_barcode = barcode
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{ts}] 扫码: {barcode}")
             with open(LOG_FILE, "a", encoding="utf-8") as f:

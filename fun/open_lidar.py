@@ -9,6 +9,7 @@
 说明：串口权限通过将用户加入 dialout 组解决，无需每次授权。
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -33,11 +34,15 @@ def ros_env_prefix() -> str:
 
 
 def main() -> None:
-    port = serial_ports.find_lidar_port()
+    parser = argparse.ArgumentParser(description="打开 RPLIDAR C1 激光雷达")
+    parser.add_argument("-p", "--port", help="雷达串口（覆盖自动识别）")
+    args, _ = parser.parse_known_args()
+
+    port = args.port or serial_ports.find_lidar_port()
     if port is None:
         sys.exit(1)
 
-    launch = f"{ros_env_prefix()}ros2 launch {LIDAR_PKG} {LIDAR_LAUNCH}"
+    launch = f"{ros_env_prefix()}ros2 launch {LIDAR_PKG} {LIDAR_LAUNCH} serial_port:={port}"
     run(launch)
 
 

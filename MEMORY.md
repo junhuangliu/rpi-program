@@ -38,6 +38,7 @@
   - 上行 `#<命令>$` → 命令表 `self.commands` 调服务 → 回传 `#RES,<内容>$`
   - 命令表占位：TASK1→/camera/command、QR→/scanner/query；帧头尾/分隔符是常量（FRAME_HEAD/TAIL/FIELD_SEP），协议确定后改
   - 端口用 `-p` 指定；需 MultiThreadedExecutor（服务阻塞不挡 10Hz）；rclpy Future 无 `timeout_sec` 参数，用轮询 `done()`+超时
+- 串口识别加固：`find_port()` 按 by-id 关键词命中**多个**候选（如同型号多块 CP210）时不再猜测，打印全部并返回 None 提示用 `-p` 显式指定；`slam`/`open_lidar` 均支持 `-p/--port` 覆盖串口
 
 ## 约定
 

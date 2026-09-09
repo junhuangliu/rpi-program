@@ -61,12 +61,22 @@ def list_ports() -> list[tuple[str, str]]:
 
 def find_port(keywords: tuple[str, ...], vid: str | None = None,
               pid: str | None = None, label: str = "设备") -> str | None:
-    """按 by-id 关键词优先、sysfs VID/PID 兜底匹配串口，未找到返回 None。"""
+    """按 by-id 关键词优先、sysfs VID/PID 兜底匹配串口，未找到返回 None。
+
+    同一关键词命中多个 by-id 链接（如同型号芯片多块）时，不猜测，打印全部
+    候选并要求显式指定端口，避免连错设备。
+    """
     byid = by_id_ports()
-    for port, link in byid.items():
-        if any(k in link for k in keywords):
-            print(f"[OK] 检测到{label}串口: {port}  (by-id: {link})")
-            return port
+    hits = [port for port, link in byid.items()
+            if any(k in link for k in keywords)]
+    if len(hits) == 1:
+        print(f"[OK] 检测到{label}串口: {hits[0]}  (by-id: {byid[hits[0]]})")
+        return hits[0]
+    if len(hits) > 1:
+        print(f"[错误] 检测到多个{label}候选，无法自动判断，请显式指定串口:")
+        for port in hits:
+            print(f"        {port}  ({byid[port]})")
+        return None
     for port, tag in list_ports():
         if vid and not tag.startswith(vid):
             continue

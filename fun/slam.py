@@ -9,6 +9,7 @@
   - 手持缓慢移动雷达即可边建图边定位
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -33,7 +34,11 @@ def ros_env_prefix() -> str:
 
 
 def main() -> None:
-    port = serial_ports.find_lidar_port()
+    parser = argparse.ArgumentParser(description="手持式 2D 激光 SLAM")
+    parser.add_argument("-p", "--port", help="雷达串口（覆盖自动识别）")
+    args, _ = parser.parse_known_args()
+
+    port = args.port or serial_ports.find_lidar_port()
     if port is None:
         sys.exit(1)
 

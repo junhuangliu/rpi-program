@@ -9,7 +9,7 @@
                   QRB      -> /scanner/query_parsed（编号+4情况映射拼接，如 12462213）
 
 用法：
-  python3 start.py bridge -p/--port <串口> [-b/--baudrate 115200]
+  python3 start.py bridge -p/--port <串口> [-b/--baudrate 115200] [-d/--debug]
 
   默认帧协议（占位，待上位机侧确认后调整 FRAME_HEAD/FRAME_TAIL/FIELD_SEP）：
     下行坐标:  #POS,x,y,yaw   （无 SLAM 时 #POS,no_tf）
@@ -69,9 +69,10 @@ def quat_to_yaw(q) -> float:
 class BridgeNode(Node):
     """上位机桥接节点：10Hz 坐标下行 + 命令上行转发服务。"""
 
-    def __init__(self, port: str, baudrate: int) -> None:
+    def __init__(self, port: str, baudrate: int, debug: bool = False) -> None:
         super().__init__("host_bridge")
         self.port = port
+        self.debug = debug
         self.ser = serial.Serial(port, baudrate, timeout=0.2)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -101,7 +102,10 @@ class BridgeNode(Node):
             payload = f"POS{FIELD_SEP}{t.x:.3f}{FIELD_SEP}{t.y:.3f}{FIELD_SEP}{quat_to_yaw(q):.3f}"
         except Exception:
             payload = f"POS{FIELD_SEP}{STATUS_NO_TF}"
-        self.ser.write(self._frame(payload))
+        frame = self._frame(payload)
+        if self.debug:
+            self.get_logger().info(f"[TX] {frame.decode('utf-8', errors='replace').rstrip()}")
+        self.ser.write(frame)
         self.ser.flush()
 
     # ---------------- 上行：命令处理 ----------------
@@ -196,6 +200,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="上位机串口桥接节点")
     parser.add_argument("-p", "--port", required=False, help="上位机串口")
     parser.add_argument("-b", "--baudrate", type=int, default=BAUDRATE, help=f"波特率(默认 {BAUDRATE})")
+    parser.add_argument("-d", "--debug", action="store_true", help="调试模式：打印每帧发送内容")
     args, _ = parser.parse_known_args()
 
     port = args.port
@@ -205,7 +210,7 @@ def main() -> None:
 
     rclpy.init()
     executor = MultiThreadedExecutor()
-    node = BridgeNode(port, args.baudrate)
+    node = BridgeNode(port, args.baudrate, args.debug)
     try:
         executor.add_node(node)
         rclpy.spin(node, executor=executor)

@@ -36,7 +36,7 @@
 - ROS 任务 vs 事件流约定：短任务/一问一答 = Service（OpenMV 用 `openmv_msgs/srv/Command`）；持续事件流 = Topic（扫码 `/scanner/barcode`）；长流程/进度 = Action
 - OpenMV 服务包：`~/ros2_ws/src/openmv_msgs`（`srv/Command.srv`），`colcon build` 后须 source `~/ros2_ws/install/setup.bash`；节点 `fun/camera.py` 提供 `/camera/command` service + `/camera/result` 话题
 - 上位机桥接：`fun/bridge.py`（节点 `host_bridge`）经 USB 虚拟串口（115200）与上位机通信：
-  - 下行 10Hz `#POS,x,y,yaw$`（TF map->base_link；无 SLAM 时 `#POS,no_tf$`）
+  - 下行 10Hz `#POS,x,y,yaw$`（TF map->base_link；无 SLAM 时 `#POS,no_tf$`）；`-d/--debug` 开关把每帧发送内容打到 rclpy 日志（后台 `/tmp/bridge.log`），用于在无上位机时查看实际发送数据
   - 上行 `#<命令>$` → 命令表 `self.commands` 调服务 → 回传 `#RES,<内容>$`
   - 命令表：TASK1→/camera/command（OpenMV）；QR/QRC→/scanner/query（原样整条）；QRB→/scanner/query_parsed（解析后：编号+4行情况映射，如 12462213）；帧头尾/分隔符是常量（FRAME_HEAD/TAIL/FIELD_SEP），协议确定后改
   - 端口用 `-p` 指定；需 MultiThreadedExecutor（服务阻塞不挡 10Hz）；rclpy Future 无 `timeout_sec` 参数，用轮询 `done()`+超时

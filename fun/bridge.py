@@ -4,7 +4,9 @@
 功能：
   1. 10Hz 下行：订阅 TF map->base_link，组坐标帧（x,y,yaw）发送给上位机
   2. 上行监听：解析上位机命令帧，查命令表并调用对应 ROS2 服务，回传结果帧
-  3. 已接服务：TASK1 -> /camera/command（OpenMV 视觉任务）；QR -> /scanner/query（最近条码）
+  3. 已接服务：TASK1 -> /camera/command（OpenMV 视觉任务）；
+                  QR / QRC -> /scanner/query（最近条码原样）
+                  QRB      -> /scanner/query_parsed（编号+4情况映射拼接，如 12462213）
 
 用法：
   python3 start.py bridge -p/--port <串口> [-b/--baudrate 115200]
@@ -75,9 +77,12 @@ class BridgeNode(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.cli_camera = self.create_client(Command, "camera/command")
         self.cli_scanner = self.create_client(Trigger, "scanner/query")
+        self.cli_scanner_parsed = self.create_client(Trigger, "scanner/query_parsed")
         self.commands = {
             "TASK1": self._cmd_camera,
             "QR": self._cmd_scanner,
+            "QRC": self._cmd_scanner,
+            "QRB": self._cmd_scanner_parsed,
         }
         self.timer = self.create_timer(1.0 / POS_RATE_HZ, self.on_pos_timer)
         self._stop = threading.Event()
@@ -135,10 +140,18 @@ class BridgeNode(Node):
         return resp.result
 
     def _cmd_scanner(self, fields: list[str]) -> str:
-        """调用 /scanner/query 获取最近条码。"""
+        """调用 /scanner/query 获取最近条码（原样整条）。"""
         if not self.cli_scanner.wait_for_service(timeout_sec=5.0):
             raise RuntimeError("scanner/query 服务不可用")
         fut = self.cli_scanner.call_async(Trigger.Request())
+        resp = self._wait_future(fut, SCANNER_TIMEOUT)
+        return resp.message
+
+    def _cmd_scanner_parsed(self, fields: list[str]) -> str:
+        """调用 /scanner/query_parsed 获取解析结果（编号+4情况映射；未扫码/解析失败为 ERROR:...）。"""
+        if not self.cli_scanner_parsed.wait_for_service(timeout_sec=5.0):
+            raise RuntimeError("scanner/query_parsed 服务不可用")
+        fut = self.cli_scanner_parsed.call_async(Trigger.Request())
         resp = self._wait_future(fut, SCANNER_TIMEOUT)
         return resp.message
 

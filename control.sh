@@ -12,10 +12,12 @@
 #   camera <命令>                                 调 /camera/command（默认 TASK1，可接 TRACK/SNAPSHOT/IRRIGATION）
 #   tf                                            查看 TF map->base_link 坐标
 #   hz                                            查看 /scan 发布频率
+#   oc                                            调 /obstacle/check 服务（前方矩形障碍检测）
 #   svc                                           列出关键服务是否在线
 #
 # 说明:
 #   - all = slam + scanner + camera（当前供电安全组合；OpenMV 未插时 camera 会自行退出）
+#   - 障碍检测节点随 slam 一起启停（由 slam_launch.py 拉起）
 #   - 用电受限：雷达电机启动可能触发 USB 过流，建议外设少接
 #   - 停止使用 kill + 精确进程匹配，避免 pkill 自匹配坑
 set -u
@@ -40,6 +42,7 @@ usage() {
     echo "  camera <命令>                                    调用 /camera/command（默认 TASK1）"
     echo "  tf                                               查看 TF map->base_link"
     echo "  hz                                               查看 /scan 频率"
+    echo "  oc                                               调用 /obstacle/check（前方矩形障碍检测）"
     echo "  svc                                              列出关键服务"
 }
 
@@ -96,6 +99,7 @@ cleanup() { # fn
             pkill -9 -f "laser_scan_matcher" 2>/dev/null
             pkill -9 -f "async_slam_toolbox_node" 2>/dev/null
             pkill -9 -f "static_transform_publisher" 2>/dev/null
+            pkill -9 -f "fun/obstacle.py" 2>/dev/null
             pkill -9 -f "rviz2 -d" 2>/dev/null
             ;;
     esac
@@ -177,13 +181,19 @@ cmd_hz() {
     timeout 8 ros2 topic hz /scan 2>&1 | tail -2
 }
 
+# 快捷：前方矩形障碍检测
+cmd_oc() {
+    env_pre
+    timeout 8 ros2 service call /obstacle/check rpi_msgs/srv/ObstacleCheck "{}" 2>&1 | tail -12
+}
+
 # 快捷：关键服务在线检查
 cmd_svc() {
     env_pre
     echo "关键服务:"
     local s alive
     alive=$(timeout 6 ros2 service list 2>/dev/null)
-    for s in /scanner/query /scanner/query_parsed /camera/command /slam_toolbox/get_state /slam_toolbox/save_map; do
+    for s in /scanner/query /scanner/query_parsed /camera/command /obstacle/check /slam_toolbox/get_state /slam_toolbox/save_map; do
         if echo "$alive" | grep -qx "$s" >/dev/null; then
             echo "  [OK]    $s"
         else
@@ -222,6 +232,7 @@ case "$cmd" in
     camera) cmd_camera "${1:-}" ;;
     tf) cmd_tf ;;
     hz) cmd_hz ;;
+    oc) cmd_oc ;;
     svc) cmd_svc ;;
     *) usage ;;
 esac

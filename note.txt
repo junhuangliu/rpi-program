@@ -2,3 +2,9 @@
 	sudo dss start
 #验证成功性
 	curl -I -x http://127.0.0.1:31180 https://github.com
+
+#修改雷达屏蔽最近距离（0.15m → 0.20m）
+	文件：~/ros2_ws/src/rplidar_ros/src/rplidar_node.cpp 第257行
+	修改：scan_msg->range_min = 0.15;  →  scan_msg->range_min = 0.20;
+	编译：cd ~/ros2_ws && colcon build --packages-select rplidar_ros
+	生效：重启 slam（control.sh stop slam && control.sh start slam）

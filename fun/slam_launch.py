@@ -14,8 +14,8 @@ TF 树：map -> odom -> base_link -> laser
 import os
 
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, EmitEvent, LogInfo,
-                            RegisterEventHandler)
+from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
+                            LogInfo, RegisterEventHandler)
 from launch.conditions import IfCondition
 from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration
@@ -40,6 +40,10 @@ def generate_launch_description():
     )
     autostart = LaunchConfiguration("autostart", default="true")
 
+    obstacle_script = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "fun", "obstacle.py")
+
     # 1. 雷达驱动节点
     rplidar_node = Node(
         package="rplidar_ros",
@@ -57,23 +61,29 @@ def generate_launch_description():
         output="screen",
     )
 
-    # 2. base_link -> laser 静态 TF（手持式，雷达即本体，偏移为 0）
+    # 2. laser -> base_link 静态 TF（手持式，雷达反装朝后：base_link 相对激光绕 z 转 180°）
+    #    matcher 已发 odom->laser，故静态 TF 以 laser 为父、base_link 为子，
+    #    TF 树成单链 map->odom->laser->base_link（laser 只能有一个父）
+    #    旧式参数顺序 x y z yaw pitch roll parent child
     base_to_laser_node = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
         name="base_to_laser",
-        arguments=["0", "0", "0", "0", "0", "0",
-                   "base_link", "laser"],
+        arguments=["0", "0", "0", "3.14159265", "0", "0",
+                   "laser", "base_link"],
         output="screen",
     )
 
     # 3. 激光里程计（laser_scan_matcher）
+    #    base_frame=laser：matcher 只在激光系估运动（发射 odom->laser），
+    #    180° 逆装关系交给 base->laser 静态 TF（odom->laser->base_link），
+    #    避免 matcher 在 base_link 与 laser 差 180° 时方向反。
     laser_scan_matcher_node = Node(
         package="ros2_laser_scan_matcher",
         executable="laser_scan_matcher",
         name="laser_scan_matcher",
         parameters=[{
-            "base_frame": "base_link",
+            "base_frame": "laser",
             "odom_frame": "odom",
             "laser_frame": "laser",
             "publish_tf": True,
@@ -128,7 +138,14 @@ def generate_launch_description():
         condition=IfCondition(autostart),
     )
 
-    # 5. rviz2 可视化
+    # 5. 障碍物检测服务节点（随 slam 启停，提供 /obstacle/check）
+    obstacle_node = ExecuteProcess(
+        cmd=["python3", obstacle_script],
+        name="obstacle_check",
+        output="screen",
+    )
+
+    # 6. rviz2 可视化
     # 树莓派 v3d 驱动仅支持 OpenGL 3.1，rviz2 地图 shader 会导致崩溃，
     # 故强制使用软件渲染（llvmpipe，OpenGL 4.5）
     rviz2_node = Node(
@@ -159,5 +176,6 @@ def generate_launch_description():
         slam_toolbox_node,
         configure_event,
         activate_event,
+        obstacle_node,
         rviz2_node,
     ])

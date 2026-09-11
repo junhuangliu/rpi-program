@@ -3,7 +3,7 @@
 
 import sys
 
-from fun import bridge, camera, scanner, open_lidar, slam
+from fun import bridge, camera, scanner, open_lidar, obstacle, slam
 
 FUNCS = {
     "lidar": open_lidar.main,
@@ -11,6 +11,7 @@ FUNCS = {
     "scanner": scanner.main,
     "camera": camera.main,
     "bridge": bridge.main,
+    "obstacle": obstacle.main,
 }
 
 

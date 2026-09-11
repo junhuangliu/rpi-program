@@ -20,6 +20,18 @@
 - GitHub 加速：使用 dev-sidecar（sudo dss start），验证命令详情见项目 note.txt
 - 日志体系：项目内自管理，daily 日志在 `instruction/daily/YYYY-MM-DD.md`，规则见 `instruction/LOG.md`
 - 雷达串口权限：已配置 `/etc/udev/rules.d/rplidar.rules`（匹配 10c4:ea60，`MODE:=0777`）。若 `/dev/ttyUSB0` 权限异常（非 777），重插 USB 或执行 `sudo udevadm control --reload-rules && sudo udevadm trigger` 使其生效
+- 雷达屏蔽最近距离：`rplidar_ros` 的 `range_min` **硬编码**在 `~/ros2_ws/src/rplidar_ros/src/rplidar_node.cpp:257`（当前 `0.20`，即 20cm 内屏蔽），无 ROS 参数可覆盖；`range_max` 从硬件自动读取（C1 Standard 16.0m）。改法见项目 `note.txt`（改源码→colcon build→重启 slam）
+- 雷达反装朝向：RPLIDAR 逆装（激光 x+ 指向机器人**后方**）。坐标系关键配置（`fun/slam_launch.py`）：
+  - **`laser→base_link` 静态 TF 绕 z 转 180°**（`static_transform_publisher` 旧式参数顺序 **`x y z yaw pitch roll parent child`**，yaw 须在第 4 位；写错则变成绕 x 翻转让方向全反）
+  - `laser_scan_matcher` 的 `base_frame=laser`（发 `odom→laser`），TF 链为 **`map→odom→laser→base_link`**；laser 只能有唯一父（odom），若 static 以 base_link 为父发 `base_link→laser` 会形成两棵树导致 TF 断裂
+  - `mapper_params_online_async.yaml` 的 `base_frame: laser`（与 matcher 一致，否则 slam_toolbox 报 "Failed to compute odom pose"）
+  - 效果：`map→base_link` 的位移/朝向准确反映机器人实际运动（实测顺转 90°→yaw－92°，前推→对应 map 位移），前方=+x
+- `#POS` 帧的 yaw 用**导航惯例**（0=朝北、顺时针为正）：`fun/bridge.py` 对 ROS 右手系 yaw **取负**（`-quat_to_yaw(q)`）
+- 前方障碍检测服务 `/obstacle/check`（自定义包 `~/ros2_ws/src/rpi_msgs`）：
+  - 节点 `fun/obstacle.py`（`obstacle_check`）订阅 `/scan`，**随 slam 一起启停**（slam_launch.py `ExecuteProcess` 拉起）；单独运行 `python3 start.py obstacle`
+  - **返回坐标为 base_link 系（前方=+x 正数）**：`/scan` 激光系点绕 z 转 180° 换算（`RADAR_INVERTED`，与 laser→base_link 静态 TF 定义一致）
+  - 矩形区域：`x∈[0.2,1.0]`、`y∈[-0.15,0.15]`（declare_parameter 可覆盖）；聚类阈值 0.15m（相邻点距 ≤0.15 同簇），返回每个障碍簇中心坐标 x/y/distance/angle/point_count/nearest + 全局 min_distance
+  - 调用：`ros2 service call /obstacle/check rpi_msgs/srv/ObstacleCheck "{}"` 或 `./control.sh oc`
 - rviz2 在树莓派上须用软件渲染：树莓派 5 v3d 驱动仅支持 OpenGL 3.1，rviz2 地图 shader 链接失败会崩溃。解决：rviz2 节点设 `additional_env={"LIBGL_ALWAYS_SOFTWARE": "1"}`（llvmpipe，OpenGL 4.5）。已在 `fun/slam_launch.py` 中配置
 - rviz 视图缩放：`TopDownOrtho` 视图里**真正控制缩放的是 `Scale` 参数**（值越大显示越大，默认 50），而非 `Distance`（相机距离）。`slam.rviz` 已把 `Scale` 设为 200
 - 系统无 `python` 命令，Python 脚本须用 `python3` 运行（如 `python3 start.py slam`）
@@ -56,9 +68,10 @@
 | 功能 | 命令 | 说明 |
 |---|---|---|
 | 开雷达 | `python3 start.py lidar` | 识别雷达→开 rviz |
-| 建图 | `python3 start.py slam` | 5 节点手持建图，串口自动识别 |
+| 建图 | `python3 start.py slam` | 6 节点手持建图（含障碍检测），串口自动识别 |
 | 扫码 | `python3 start.py scanner` | 广播 `/scanner/barcode` + 服务 `/scanner/query` |
 | OpenMV 任务 | `python3 start.py camera` | 服务 `/camera/command`(openmv_msgs)，调用例：`ros2 service call /camera/command openmv_msgs/srv/Command "{command: 'TASK1'}"` |
+| 障碍检测 | `python3 start.py obstacle` | 服务 `/obstacle/check`（默认随 slam 拉起） |
 | 桥接上位机 | `python3 start.py bridge -p /dev/ttyACMx` | `-p` 指定上位机 USB 串口 |
 
 ## 一键控制脚本 control.sh
@@ -66,7 +79,7 @@
 - 用法：`./control.sh <start|stop|status|logs|scanq|tf|hz|svc> [功能]`
   - `start/stop` 功能可选 `slam|scanner|camera|lidar|bridge|all`（all=slams+scanner+camera）
   - 后台运行、日志 `/tmp/<fn>.log`、PID 记录 `/tmp/rpi-pids/<fn>.pid`
-  - `scanq`=调 /scanner/query；`camera <命令>`=调 /camera/command（默认 TASK1，可接 TRACK/SNAPSHOT/IRRIGATION，无服务时自动提示）；`tf`=map->base_link；`hz`=/scan 频率；`svc`=关键服务在线检查
+  - `scanq`=调 /scanner/query；`camera <命令>`=调 /camera/command（默认 TASK1，可接 TRACK/SNAPSHOT/IRRIGATION，无服务时自动提示）；`tf`=map->base_link；`hz`=/scan 频率；`oc`=调 /obstacle/check（前方矩形障碍检测）；`svc`=关键服务在线检查
 - 实现要点：脚本免 source 环境（内置 set +u 规避 ROS setup 的未定义变量）；停止用 kill+pgrep 精确匹配（避开 pkill 自匹配坑）
 
 服务自测：`ros2 service call /scanner/query std_srvs/srv/Trigger`；`ros2 topic echo /scanner/barcode`。

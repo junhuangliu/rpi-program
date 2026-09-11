@@ -42,7 +42,8 @@ def main() -> None:
     if port is None:
         sys.exit(1)
 
-    launch = f"{ros_env_prefix()}ros2 launch {LIDAR_PKG} {LIDAR_LAUNCH} serial_port:={port}"
+    launch = (f"{ros_env_prefix()}ros2 launch {LIDAR_PKG} {LIDAR_LAUNCH} "
+              f"serial_port:={port}")
     run(launch)
 
 

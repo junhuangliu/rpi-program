@@ -13,6 +13,7 @@
 
   默认帧协议（占位，待上位机侧确认后调整 FRAME_HEAD/FRAME_TAIL/FIELD_SEP）：
     下行坐标:  #POS,x,y,yaw   （无 SLAM 时 #POS,no_tf）
+              yaw 用导航惯例：0=朝北、顺时针为正（右手系取负）
     上行命令:  #<命令>[,参数...]     例: #TASK1 / #QR
     回传结果:  #RES,<内容>
     行尾:      \r\n
@@ -95,11 +96,16 @@ class BridgeNode(Node):
 
     # ---------------- 下行：周期坐标 ----------------
     def on_pos_timer(self) -> None:
-        """10Hz：读取 map->base_link TF 并发送坐标帧。"""
+        """10Hz：读取 map->base_link TF 并发送坐标帧。
+
+        yaw 使用导航惯例（0=朝北、顺时针为正）：对标准右手系取负。
+        """
         try:
             f = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
             t, q = f.transform.translation, f.transform.rotation
-            payload = f"POS{FIELD_SEP}{t.x:.3f}{FIELD_SEP}{t.y:.3f}{FIELD_SEP}{quat_to_yaw(q):.3f}"
+            payload = (
+                f"POS{FIELD_SEP}{t.x:.3f}{FIELD_SEP}{t.y:.3f}"
+                f"{FIELD_SEP}{-quat_to_yaw(q):.3f}")
         except Exception:
             payload = f"POS{FIELD_SEP}{STATUS_NO_TF}"
         frame = self._frame(payload)

@@ -53,6 +53,13 @@
   - 命令表：TASK1→/camera/command（OpenMV）；QR/QRC→/scanner/query（原样整条）；QRB→/scanner/query_parsed（解析后：编号+4行情况映射，如 12462213）；帧头尾/分隔符是常量（FRAME_HEAD/TAIL/FIELD_SEP），协议确定后改
   - 端口用 `-p` 指定；需 MultiThreadedExecutor（服务阻塞不挡 10Hz）；rclpy Future 无 `timeout_sec` 参数，用轮询 `done()`+超时
 - 串口识别加固：`find_port()` 按 by-id 关键词命中**多个**候选（如同型号多块 CP210）时不再猜测，打印全部并返回 None 提示用 `-p` 显式指定；`slam`/`open_lidar` 均支持 `-p/--port` 覆盖串口
+- MaixCAM 数据接收节点 `fun/maixcam.py`（独立于 USB 外设）：
+  - **TCP Server** 监听 `0.0.0.0:8080`（`-p/--port` 可改），MaixCAM **主动连接**并按行（`\n`）发送数据（参考代码逻辑：accept 循环 + 每连接一线程）
+  - 每条数据：缓存最近一条 + 终端打印 + 追加 `maixcam.log` + 发布 `/maixcam/data`（std_msgs/String）
+  - 服务 `/maixcam/query`（Trigger）：返回最近一条；从未收到 → `success=false, message="NO_DATA"`
+  - 重连/健壮性：进程不退出持续 accept；每连接 `recv` 超时 5s（`-t` 可改）防 TCP 半开卡死；断开自动释放连接，MaixCAM 可随时重连
+  - 调用示例：`./control.sh mq` 或 `ros2 service call /maixcam/query std_srvs/srv/Trigger`；模拟发送 `printf 'x\n' | nc <IP> 8080`
+  - 单个 ROS 节点同时监听多个端口/实例时同名节点（`maixcam_node`）会冲突，需不同节点名
 
 ## 约定
 
@@ -72,14 +79,15 @@
 | 扫码 | `python3 start.py scanner` | 广播 `/scanner/barcode` + 服务 `/scanner/query` |
 | OpenMV 任务 | `python3 start.py camera` | 服务 `/camera/command`(openmv_msgs)，调用例：`ros2 service call /camera/command openmv_msgs/srv/Command "{command: 'TASK1'}"` |
 | 障碍检测 | `python3 start.py obstacle` | 服务 `/obstacle/check`（默认随 slam 拉起） |
+| MaixCAM 数据 | `python3 start.py maixcam [-p 8080]` | TCP 8080 收数据→话题 `/maixcam/data` + 服务 `/maixcam/query` |
 | 桥接上位机 | `python3 start.py bridge -p /dev/ttyACMx` | `-p` 指定上位机 USB 串口 |
 
 ## 一键控制脚本 control.sh
 
-- 用法：`./control.sh <start|stop|status|logs|scanq|tf|hz|svc> [功能]`
-  - `start/stop` 功能可选 `slam|scanner|camera|lidar|bridge|all`（all=slams+scanner+camera）
+- 用法：`./control.sh <start|stop|status|logs|scanq|mq|tf|hz|svc> [功能]`
+  - `start/stop` 功能可选 `slam|scanner|camera|lidar|bridge|maixcam|all`（all=slams+scanner+camera）
   - 后台运行、日志 `/tmp/<fn>.log`、PID 记录 `/tmp/rpi-pids/<fn>.pid`
-  - `scanq`=调 /scanner/query；`camera <命令>`=调 /camera/command（默认 TASK1，可接 TRACK/SNAPSHOT/IRRIGATION，无服务时自动提示）；`tf`=map->base_link；`hz`=/scan 频率；`oc`=调 /obstacle/check（前方矩形障碍检测）；`svc`=关键服务在线检查
+  - `scanq`=调 /scanner/query；`camera <命令>`=调 /camera/command（默认 TASK1，可接 TRACK/SNAPSHOT/IRRIGATION，无服务时自动提示）；`tf`=map->base_link；`hz`=/scan 频率；`oc`=调 /obstacle/check（前方矩形障碍检测）；`mq`=调 /maixcam/query（最近一条）；`svc`=关键服务在线检查
 - 实现要点：脚本免 source 环境（内置 set +u 规避 ROS setup 的未定义变量）；停止用 kill+pgrep 精确匹配（避开 pkill 自匹配坑）
 
 服务自测：`ros2 service call /scanner/query std_srvs/srv/Trigger`；`ros2 topic echo /scanner/barcode`。

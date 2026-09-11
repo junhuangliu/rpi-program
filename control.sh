@@ -2,10 +2,10 @@
 # rpi-program 一键启动/控制脚本
 #
 # 用法: ./control.sh <命令> [功能]
-#   start  <slam|scanner|camera|lidar|bridge|all>  后台启动对应功能（日志 /tmp/<fn>.log）
+#   start  <slam|scanner|camera|lidar|bridge|maixcam|all>  后台启动对应功能（日志 /tmp/<fn>.log）
 #   stop   <同上|all>                               停止对应功能（含清除子进程）
 #   status                                         查看全部功能运行状态
-#   logs   <slam|scanner|camera|lidar|bridge>       tail -f 查看日志
+#   logs   <slam|scanner|camera|lidar|bridge|maixcam>  tail -f 查看日志
 #   scanq                                         调 /scanner/query 服务
 #   qrc                                             调 /scanner/query（原样整条，同 scanq）
 #   qrb                                             调 /scanner/query_parsed（解析后：编号+4情况映射）
@@ -13,6 +13,7 @@
 #   tf                                            查看 TF map->base_link 坐标
 #   hz                                            查看 /scan 发布频率
 #   oc                                            调 /obstacle/check 服务（前方矩形障碍检测）
+#   mq                                            调 /maixcam/query（最近一条 MaixCAM 数据）
 #   svc                                           列出关键服务是否在线
 #
 # 说明:
@@ -25,14 +26,14 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_DIR="/tmp/rpi-pids"
 mkdir -p "$PID_DIR"
-FUNCS_ALL=(slam scanner camera lidar bridge)
+FUNCS_ALL=(slam scanner camera lidar bridge maixcam)
 
 # 用法提示
 usage() {
     echo "用法: $0 <命令> [功能]"
     echo
     echo "命令:"
-    echo "  start  <slam|scanner|camera|lidar|bridge|all>  后台启动功能（all=slam+scanner+camera）"
+    echo "  start  <slam|scanner|camera|lidar|bridge|maixcam|all>  后台启动功能（all=slam+scanner+camera）"
     echo "  stop   <同上|all>                               停止功能"
     echo "  status                                          查看全部功能状态"
     echo "  logs   <功能>                                    tail -f 日志"
@@ -43,6 +44,7 @@ usage() {
     echo "  tf                                               查看 TF map->base_link"
     echo "  hz                                               查看 /scan 频率"
     echo "  oc                                               调用 /obstacle/check（前方矩形障碍检测）"
+    echo "  mq                                               调用 /maixcam/query（最近一条 MaixCAM 数据）"
     echo "  svc                                              列出关键服务"
 }
 
@@ -187,13 +189,19 @@ cmd_oc() {
     timeout 8 ros2 service call /obstacle/check rpi_msgs/srv/ObstacleCheck "{}" 2>&1 | tail -12
 }
 
+# 快捷：查询 MaixCAM 最近数据
+cmd_mq() {
+    env_pre
+    timeout 8 ros2 service call /maixcam/query std_srvs/srv/Trigger 2>&1 | tail -5
+}
+
 # 快捷：关键服务在线检查
 cmd_svc() {
     env_pre
     echo "关键服务:"
     local s alive
     alive=$(timeout 6 ros2 service list 2>/dev/null)
-    for s in /scanner/query /scanner/query_parsed /camera/command /obstacle/check /slam_toolbox/get_state /slam_toolbox/save_map; do
+    for s in /scanner/query /scanner/query_parsed /camera/command /obstacle/check /maixcam/query /slam_toolbox/get_state /slam_toolbox/save_map; do
         if echo "$alive" | grep -qx "$s" >/dev/null; then
             echo "  [OK]    $s"
         else
@@ -233,6 +241,7 @@ case "$cmd" in
     tf) cmd_tf ;;
     hz) cmd_hz ;;
     oc) cmd_oc ;;
+    mq) cmd_mq ;;
     svc) cmd_svc ;;
     *) usage ;;
 esac

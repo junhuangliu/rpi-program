@@ -7,21 +7,24 @@
   3. 已接服务：TASK1 -> /camera/command（OpenMV 视觉任务）；
                   QR / QRC -> /scanner/query（最近条码原样）
                   QRB      -> /scanner/query_parsed（编号+4情况映射拼接，如 12462213）
+                  QRA      -> /maixcam/query（最近一条 MaixCAM 数据，无数据回传 NO_DATA）
+                  OBS      -> /obstacle/check（前方最近障碍 x,y，base_link 系；无则 0.0,0.0）
 
 用法：
   python3 start.py bridge -p/--port <串口> [-b/--baudrate 115200] [-d/--debug]
 
   默认帧协议（占位，待上位机侧确认后调整 FRAME_HEAD/FRAME_TAIL/FIELD_SEP）：
-    下行坐标:  #POS,x,y,yaw   （无 SLAM 时 #POS,no_tf）
-              yaw 用导航惯例：0=朝北、顺时针为正（右手系取负）
+    下行坐标:  #POS,x,y,yaw   （无 SLAM 时 #POS,no_tf；整车初始系：初始 0,0,0，
+               x=初始前方、y=初始左侧、yaw 归约 [-π,π]，左转为负）
     上行命令:  #<命令>[,参数...]     例: #TASK1 / #QR
-    回传结果:  #RES,<内容>
+    回传结果:  #<对应指令>,<内容>   例: #QRB,12462213$ / #OBS,0.233,0.066$
+              （未识别命令回 #UNKNOWN,<命令>；服务异常回 #<指令>,ERROR:<原因>）
     行尾:      \r\n
   命令表以 self.commands 为准（待用户提供完整命令表后扩充）。
 
 说明：
-  - 上位机为 USB 虚拟串口；端口需用 -p 指定（插入后若需自动识别，把其 VID/PID
-    加入 serial_ports.py）
+  - 上位机为 USB 虚拟串口（STM32 Car）；未指定 -p 时自动识别 STM32 串口，
+    也可用 -p 显式指定端口
   - 节点使用 MultiThreadedExecutor：坐标定时器与命令处理互不阻塞（服务调用最长等待耗时不阻挡 10Hz 坐标发送）
 """
 
@@ -55,6 +58,7 @@ try:
     from tf2_ros import Buffer, TransformListener
     from openmv_msgs.srv import Command
     from std_srvs.srv import Trigger
+    from rpi_msgs.srv import ObstacleCheck
 
     _ROS_ERR = None
 except ModuleNotFoundError as e:
@@ -80,14 +84,19 @@ class BridgeNode(Node):
         self.cli_camera = self.create_client(Command, "camera/command")
         self.cli_scanner = self.create_client(Trigger, "scanner/query")
         self.cli_scanner_parsed = self.create_client(Trigger, "scanner/query_parsed")
+        self.cli_maixcam = self.create_client(Trigger, "maixcam/query")
+        self.cli_obstacle = self.create_client(ObstacleCheck, "obstacle/check")
         self.commands = {
             "TASK1": self._cmd_camera,
             "QR": self._cmd_scanner,
             "QRC": self._cmd_scanner,
             "QRB": self._cmd_scanner_parsed,
+            "QRA": self._cmd_maixcam,
+            "OBS": self._cmd_obstacle,
         }
         self.timer = self.create_timer(1.0 / POS_RATE_HZ, self.on_pos_timer)
         self._stop = threading.Event()
+        self._origin = None            # 首次 TF 位姿 (x0,y0,yaw0)，作为整车初始坐标系
         self._reader = threading.Thread(target=self.read_loop, daemon=True)
         self._reader.start()
         self.get_logger().info(
@@ -96,16 +105,32 @@ class BridgeNode(Node):
 
     # ---------------- 下行：周期坐标 ----------------
     def on_pos_timer(self) -> None:
-        """10Hz：读取 map->base_link TF 并发送坐标帧。
+        """10Hz：读取 map->base_link TF，转整车初始坐标系后发送坐标帧。
 
-        yaw 使用导航惯例（0=朝北、顺时针为正）：对标准右手系取负。
+        整车初始系：以首次拿到 TF 的时刻为原点/零角度（启动即 0,0,0）。
+          - x 正 = 初始时刻车头前方；y 正 = 初始时刻左侧
+          - yaw 用导航惯例（0=初始前方、左转为负）：对相对角取负，并归约到 [-π, π]
+        首次之后的 TF 换算：相对位移 (dx,dy) 绕 z 转 -yaw0 到初始系。
         """
         try:
             f = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
             t, q = f.transform.translation, f.transform.rotation
+            x, y = t.x, t.y
+            yaw = quat_to_yaw(q)
+            if self._origin is None:
+                self._origin = (x, y, yaw)
+                self.get_logger().info(
+                    f"记录整车初始位姿: x0={x:.3f}, y0={y:.3f}, yaw0={yaw:.3f}")
+            x0, y0, yaw0 = self._origin
+            dx, dy = x - x0, y - y0
+            cos0, sin0 = math.cos(yaw0), math.sin(yaw0)
+            x_f = dx * cos0 + dy * sin0
+            y_f = -dx * sin0 + dy * cos0
+            yaw_f = -math.atan2(
+                math.sin(yaw - yaw0), math.cos(yaw - yaw0))  # [-π, π]
             payload = (
-                f"POS{FIELD_SEP}{t.x:.3f}{FIELD_SEP}{t.y:.3f}"
-                f"{FIELD_SEP}{-quat_to_yaw(q):.3f}")
+                f"POS{FIELD_SEP}{x_f:.3f}{FIELD_SEP}{y_f:.3f}"
+                f"{FIELD_SEP}{yaw_f:.3f}")
         except Exception:
             payload = f"POS{FIELD_SEP}{STATUS_NO_TF}"
         frame = self._frame(payload)
@@ -121,22 +146,26 @@ class BridgeNode(Node):
             line = self.ser.readline()
             if not line:
                 continue
-            text = line.decode("utf-8", errors="replace").strip()
+            text = line.decode("utf-8", errors="replace").strip().replace("\x00", "")
             if not text:
                 continue
+            if self.debug:
+                self.get_logger().info(f"[RX] {text}")
             fields = self._parse_frame(text)
             if not fields:
                 continue
             cmd = fields[0]
             handler = self.commands.get(cmd)
             if handler is None:
-                self._reply(f"UNKNOWN:{cmd}")
+                if self.debug:
+                    self.get_logger().info(f"[RX] 未识别命令: text={text!r} fields={fields}")
+                self._reply("UNKNOWN", cmd)
                 continue
             try:
                 result = handler(fields)
             except Exception as e:
                 result = f"ERROR:{e}"
-            self._reply(result)
+            self._reply(cmd, result)
 
     def _cmd_camera(self, fields: list[str]) -> str:
         """调用 /camera/command 执行 OpenMV 任务，返回最终回显。"""
@@ -165,6 +194,26 @@ class BridgeNode(Node):
         resp = self._wait_future(fut, SCANNER_TIMEOUT)
         return resp.message
 
+    def _cmd_maixcam(self, fields: list[str]) -> str:
+        """调用 /maixcam/query 获取最近一条 MaixCAM 数据；从未收到则回传 NO_DATA。"""
+        if not self.cli_maixcam.wait_for_service(timeout_sec=5.0):
+            raise RuntimeError("maixcam/query 服务不可用")
+        fut = self.cli_maixcam.call_async(Trigger.Request())
+        resp = self._wait_future(fut, SCANNER_TIMEOUT)
+        return resp.message
+
+    def _cmd_obstacle(self, fields: list[str]) -> str:
+        """调用 /obstacle/check 获取前方障碍（base_link 系，前方=+x）；最近簇回 x,y，
+        无障碍/无扫描则回 0.0,0.0。"""
+        if not self.cli_obstacle.wait_for_service(timeout_sec=5.0):
+            raise RuntimeError("obstacle/check 服务不可用")
+        fut = self.cli_obstacle.call_async(ObstacleCheck.Request())
+        resp = self._wait_future(fut, SCANNER_TIMEOUT)
+        if not resp.success or not resp.obstacles:
+            return "0.0,0.0"
+        o = min(resp.obstacles, key=lambda o: o.distance)
+        return f"{o.x:.3f},{o.y:.3f}"
+
     @staticmethod
     def _wait_future(fut, timeout: float):
         """轮询等待 rclpy future 完成，超时抛 RuntimeError。"""
@@ -190,9 +239,12 @@ class BridgeNode(Node):
         """组帧并加行尾。"""
         return f"{FRAME_HEAD}{payload}{FRAME_TAIL}".encode() + LINE_END
 
-    def _reply(self, content: str) -> None:
-        """回传结果帧。"""
-        self.ser.write(self._frame(f"RES{FIELD_SEP}{content}"))
+    def _reply(self, cmd: str, content: str) -> None:
+        """以对应指令为帧头回传结果帧（如 #QRB,12462213$；未知命令帧头用 UNKNOWN）。"""
+        frame = self._frame(f"{cmd}{FIELD_SEP}{content}")
+        if self.debug:
+            self.get_logger().info(f"[TX] {frame.decode('utf-8', errors='replace').rstrip()}")
+        self.ser.write(frame)
         self.ser.flush()
 
 
@@ -209,9 +261,9 @@ def main() -> None:
     parser.add_argument("-d", "--debug", action="store_true", help="调试模式：打印每帧发送内容")
     args, _ = parser.parse_known_args()
 
-    port = args.port
+    port = args.port or serial_ports.find_stm32_port()
     if not port:
-        print("[错误] 未指定上位机串口，请用 -p/--port 指定（如 -p /dev/ttyACM2）")
+        print("[错误] 未找到上位机(STM32)串口，请用 -p/--port 显式指定（如 -p /dev/ttyACM2）")
         sys.exit(1)
 
     rclpy.init()

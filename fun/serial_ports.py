@@ -9,6 +9,7 @@
   - 雷达   RPLIDAR C1：CP210x（Silicon_Labs），PID ea60
   - 扫码枪 BF SCAN：   链接名含 "BF_SCAN"，VID 9901
   - OpenMV 摄像头：    PYBoard 虚拟串口（MicroPython），VID 37c5
+  - STM32（上位机）： 链接名含 "STM32"（STM32_Car Virtual ComPort），VID 0483
 """
 
 import glob
@@ -20,6 +21,8 @@ SCANNER_KEYWORDS = ("BF_SCAN",)
 SCANNER_VID = "9901"
 OPENMV_KEYWORDS = ("MicroPython",)
 OPENMV_VID = "37c5"
+STM32_KEYWORDS = ("STM32",)
+STM32_VID = "0483"
 
 
 def by_id_ports() -> dict[str, str]:
@@ -109,6 +112,11 @@ def find_scanner_port() -> str | None:
 def find_openmv_port() -> str | None:
     """返回 OpenMV 摄像头串口；未找到返回 None。"""
     return find_port(OPENMV_KEYWORDS, vid=OPENMV_VID, label="OpenMV")
+
+
+def find_stm32_port() -> str | None:
+    """返回 STM32（上位机）串口；未找到返回 None。"""
+    return find_port(STM32_KEYWORDS, vid=STM32_VID, label="STM32(上位机)")
 
 
 if __name__ == "__main__":

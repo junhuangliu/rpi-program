@@ -14,6 +14,7 @@
 - OpenMV 摄像头
 - 扫码模块
 - USB 外接串口等
+- STM32 Car（上位机）：USB 虚拟串口，VID:PID 0483:5740，by-id 名含 `STM32`
 
 ## 技术知识
 
@@ -26,7 +27,7 @@
   - `laser_scan_matcher` 的 `base_frame=laser`（发 `odom→laser`），TF 链为 **`map→odom→laser→base_link`**；laser 只能有唯一父（odom），若 static 以 base_link 为父发 `base_link→laser` 会形成两棵树导致 TF 断裂
   - `mapper_params_online_async.yaml` 的 `base_frame: laser`（与 matcher 一致，否则 slam_toolbox 报 "Failed to compute odom pose"）
   - 效果：`map→base_link` 的位移/朝向准确反映机器人实际运动（实测顺转 90°→yaw－92°，前推→对应 map 位移），前方=+x
-- `#POS` 帧的 yaw 用**导航惯例**（0=朝北、顺时针为正）：`fun/bridge.py` 对 ROS 右手系 yaw **取负**（`-quat_to_yaw(q)`）
+- `#POS` 帧的 yaw 用**导航惯例**（0=初始前方、左转为负，范围 [-π,π]）：`fun/bridge.py` 对相对角（yaw-yaw0）用 `-atan2(sin,cos)` 归约（坐标系定义见上方「整车初始坐标系」条目）
 - 前方障碍检测服务 `/obstacle/check`（自定义包 `~/ros2_ws/src/rpi_msgs`）：
   - 节点 `fun/obstacle.py`（`obstacle_check`）订阅 `/scan`，**随 slam 一起启停**（slam_launch.py `ExecuteProcess` 拉起）；单独运行 `python3 start.py obstacle`
   - **返回坐标为 base_link 系（前方=+x 正数）**：`/scan` 激光系点绕 z 转 180° 换算（`RADAR_INVERTED`，与 laser→base_link 静态 TF 定义一致）
@@ -39,7 +40,7 @@
   用 `/dev/serial/by-id/` 稳定链接识别（名称含厂商/产品/序列号，不受插拔顺序影响）：
   - 雷达 RPLIDAR：by-id 含 `Silicon_Labs`/`CP210`，PID `10c4:ea60`
   - 扫码枪 BF SCAN：by-id 含 `BF_SCAN`，VID `9901`（USB CDC 模式为 `9901:0303`）
-  - 统一工具：`fun/serial_ports.py`（find_lidar_port / find_scanner_port），缺失时回退 sysfs VID:PID 过滤
+  - 统一工具：`fun/serial_ports.py`（find_lidar_port / find_scanner_port / find_stm32_port），缺失时回退 sysfs VID:PID 过滤
 - 扫码枪串口参数：USB CDC（/dev/ttyACM*）、GBK 编码、115200 波特率；接收节点 `fun/scanner.py`（rclpy + pyserial，发布 `/scanner/barcode`，另提供 `/scanner/query` 服务返回最近条码）
   - **条码结束符=Tab**：已把扫码枪"后缀"配置成 Tab(0x09)，scanner 按 `\t` 分帧（`-e` 可改，回车模式用 `-e '\n'`），**整条二维码内容原样保留（不做任何分割/规整）**，一个二维码=一条发布；内容里的 `\r`/换行由消费端自行按需 split
   - **解析服务 `/scanner/query_parsed`**：对最近扫码做结构化解析（编号+4行情况→编号+映射拼接，如 `12462213`）；映射=轻微干旱1/一般干旱2/严重干旱3；段数≠5、编号非数字、未知情况均整体返回 `ERROR:<原因>`（对应上位机 `#QRB$`）
@@ -47,10 +48,13 @@
 - OpenMV 通信协议：命令经 REPL（USB VCP，`/\r\n` 结尾）发送，`print()` 回显（`TASK1_OK: xxxxxx` / `TASK1_TIMEOUT: xxxxxx` / `SNAPSHOT_OK` 等）；`send()` 的 `#<payload>$` 帧走 UART3 物理引脚，USB 收不到
 - ROS 任务 vs 事件流约定：短任务/一问一答 = Service（OpenMV 用 `openmv_msgs/srv/Command`）；持续事件流 = Topic（扫码 `/scanner/barcode`）；长流程/进度 = Action
 - OpenMV 服务包：`~/ros2_ws/src/openmv_msgs`（`srv/Command.srv`），`colcon build` 后须 source `~/ros2_ws/install/setup.bash`；节点 `fun/camera.py` 提供 `/camera/command` service + `/camera/result` 话题
-- 上位机桥接：`fun/bridge.py`（节点 `host_bridge`）经 USB 虚拟串口（115200）与上位机通信：
+- `#POS` 帧 = **整车初始坐标系**（`fun/bridge.py` on_pos_timer）：首次有 TF 记录 origin `(x0,y0,yaw0)`，之后位移绕 `-yaw0` 旋转到初始系（x=初始车头前方、y=初始左侧），**启动即 `#POS,0,0,0`**；角度 `yaw_f=-atan2(sin(yaw-yaw0),cos(yaw-yaw0))` 归约 **[-π,π]**、导航惯例左转负。注意：SLAM 重建 map 后需重启 bridge 复位 origin；yaw0 固定 π（雷达反装 static TF）
+- 上位机桥接：`fun/bridge.py`（节点 `host_bridge`）经 USB 虚拟串口（115200）与上位机通信。**上位机=STM32 Car**（`find_stm32_port()` 自动识别，`-p` 可手动覆盖）：
   - 下行 10Hz `#POS,x,y,yaw$`（TF map->base_link；无 SLAM 时 `#POS,no_tf$`）；`-d/--debug` 开关把每帧发送内容打到 rclpy 日志（后台 `/tmp/bridge.log`），用于在无上位机时查看实际发送数据
   - 上行 `#<命令>$` → 命令表 `self.commands` 调服务 → 回传 `#RES,<内容>$`
-  - 命令表：TASK1→/camera/command（OpenMV）；QR/QRC→/scanner/query（原样整条）；QRB→/scanner/query_parsed（解析后：编号+4行情况映射，如 12462213）；帧头尾/分隔符是常量（FRAME_HEAD/TAIL/FIELD_SEP），协议确定后改
+  - ⚠️ **STM32 帧尾 `$` 后带 NUL 字节 `\x00`**（实测 `text='#QRB$\x00'`，会导致 `endswith("$")` 失败、命令 UNKNOWN）；`read_loop` 解析前已 `replace("\x00","")` 剔除
+  - `-d` 调试日志：`[RX] <收到行>`（未知命令附 `text=... fields=...`）、`[TX] #RES,...`
+  - 命令表：TASK1→/camera/command（OpenMV）；QR/QRC→/scanner/query（原样整条）；QRB→/scanner/query_parsed（解析后：编号+4行情况映射，如 12462213）；QRA→/maixcam/query（最近一条 MaixCAM 数据，无数据 `NO_DATA`）；OBS→/obstacle/check（最近障碍 `x,y`，base_link 系；无障碍/无扫描 `0.0,0.0`）；帧头尾/分隔符是常量（FRAME_HEAD/TAIL/FIELD_SEP），协议确定后改
   - 端口用 `-p` 指定；需 MultiThreadedExecutor（服务阻塞不挡 10Hz）；rclpy Future 无 `timeout_sec` 参数，用轮询 `done()`+超时
 - 串口识别加固：`find_port()` 按 by-id 关键词命中**多个**候选（如同型号多块 CP210）时不再猜测，打印全部并返回 None 提示用 `-p` 显式指定；`slam`/`open_lidar` 均支持 `-p/--port` 覆盖串口
 - MaixCAM 数据接收节点 `fun/maixcam.py`（独立于 USB 外设）：
@@ -80,7 +84,7 @@
 | OpenMV 任务 | `python3 start.py camera` | 服务 `/camera/command`(openmv_msgs)，调用例：`ros2 service call /camera/command openmv_msgs/srv/Command "{command: 'TASK1'}"` |
 | 障碍检测 | `python3 start.py obstacle` | 服务 `/obstacle/check`（默认随 slam 拉起） |
 | MaixCAM 数据 | `python3 start.py maixcam [-p 8080]` | TCP 8080 收数据→话题 `/maixcam/data` + 服务 `/maixcam/query` |
-| 桥接上位机 | `python3 start.py bridge -p /dev/ttyACMx` | `-p` 指定上位机 USB 串口 |
+| 桥接上位机 | `python3 start.py bridge [-p /dev/ttyACMx]` | 自动识别 STM32 Car 串口，`-p` 可覆盖 |
 
 ## 一键控制脚本 control.sh
 

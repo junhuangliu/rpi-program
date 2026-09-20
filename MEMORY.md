@@ -51,8 +51,12 @@
 - ROS 任务 vs 事件流约定：短任务/一问一答 = Service（OpenMV 用 `openmv_msgs/srv/Command`）；持续事件流 = Topic（扫码 `/scanner/barcode`）；长流程/进度 = Action
 - OpenMV 服务包：`~/ros2_ws/src/openmv_msgs`（`srv/Command.srv`），`colcon build` 后须 source `~/ros2_ws/install/setup.bash`；节点 `fun/camera.py` 提供 `/camera/command` service + `/camera/result` 话题
 - `#POS` 帧 = **整车初始坐标系**（`fun/bridge.py` on_pos_timer）：首次有 TF 记录 origin `(x0,y0,yaw0)`，之后位移绕 `-yaw0` 旋转到初始系（x=初始车头前方、y=初始左侧），**启动即 `#POS,0,0,0`**；角度 `yaw_f=-atan2(sin(yaw-yaw0),cos(yaw-yaw0))` 归约 **[-π,π]**、导航惯例左转负。注意：SLAM 重建 map 后需重启 bridge 复位 origin；yaw0 固定 π（雷达反装 static TF）
+- 位移探测（2026-09-20 实测）：直推 50cm 时 `odom->laser`(laser_scan_matcher 激光里程计)=**0.504m 准**，而 `map->base_link` 仅 **0.414m** → 缩水来自 **slam_toolbox 在线建图把位姿吸回(~10%)**（每帧 scan fit 到全局地图最优，等效按巡视精度把里程宁小毋大；非固定比例，随场景约 -10~-18%）。**计程/上位机要准需用 odom 系**，故 bridge `#POS` 默认改读 `odom->base_link`（`-f map` 恢复全局系）。
+  - 整车初始系换算抽到 **`fun/coords.py`**（`quat_to_yaw` + `rel_to_origin`），bridge 与 `tool/pos.py` 共用，**保证本地看到的=上位机收到的**
+  - 无 STM32 上位机时验证计程：**`./control.sh pos`**（实时打印发给上位机的 `#POS,x,y,yaw$` 帧，Enter 重置原点模拟 bridge 重启，Ctrl+C 退出）；`tf` 命令是 map 全局系（会缩水），不能当计程读
+  - 排查工具：`tool/check_tf_dist.py`（实时显示 odom->laser/map->laser/map->base_link 位移）
 - 上位机桥接：`fun/bridge.py`（节点 `host_bridge`）经 USB 虚拟串口（115200）与上位机通信。**上位机=STM32 Car**（`find_stm32_port()` 自动识别，`-p` 可手动覆盖）：
-  - 下行 10Hz `#POS,x,y,yaw$`（TF map->base_link；无 SLAM 时 `#POS,no_tf$`）；`-d/--debug` 开关把每帧发送内容打到 rclpy 日志（后台 `/tmp/bridge.log`），用于在无上位机时查看实际发送数据
+  - 下行 10Hz `#POS,x,y,yaw$`（`-f/--frame` 选计程坐标帧：**odom 默认**=odom->base_link 激光里程计，位移准；map=全局建图系；无 TF 时 `#POS,no_tf$`）；`-d/--debug` 开关把每帧发送内容打到 rclpy 日志（后台 `/tmp/bridge.log`），用于在无上位机时查看实际发送数据
   - 上行 `#<命令>$` → 命令表 `self.commands` 调服务 → 回传 `#RES,<内容>$`
   - ⚠️ **STM32 帧尾 `$` 后带 NUL 字节 `\x00`**（实测 `text='#QRB$\x00'`，会导致 `endswith("$")` 失败、命令 UNKNOWN）；`read_loop` 解析前已 `replace("\x00","")` 剔除
   - `-d` 调试日志：`[RX] <收到行>`（未知命令附 `text=... fields=...`）、`[TX] #RES,...`
@@ -93,7 +97,7 @@
 - 用法：`./control.sh <start|stop|status|logs|scanq|mq|tf|hz|svc> [功能]`
   - `start/stop` 功能可选 `slam|scanner|camera|lidar|bridge|maixcam|all`（all=slams+scanner+camera）
   - 后台运行、日志 `/tmp/<fn>.log`、PID 记录 `/tmp/rpi-pids/<fn>.pid`
-  - `scanq`=调 /scanner/query；`camera <命令>`=调 /camera/command（默认 TASK1，可接 TRACK/SNAPSHOT/IRRIGATION，无服务时自动提示）；`tf`=map->base_link；`hz`=/scan 频率；`oc`=调 /obstacle/check（前方矩形障碍检测）；`mq`=调 /maixcam/query（最近一条）；`svc`=关键服务在线检查
+  - `scanq`=调 /scanner/query；`camera <命令>`=调 /camera/command（默认 TASK1，可接 TASK2/SNAPSHOT/TRACK/IRRIGATION，无服务时自动提示）；`pos`=实时显示发给上位机的 #POS 帧（odom 计程，无串口也能看）；`tf`=map->base_link；`hz`=/scan 频率；`oc`=调 /obstacle/check（前方矩形障碍检测）；`mq`=调 /maixcam/query（最近一条）；`svc`=关键服务在线检查
 - 实现要点：脚本免 source 环境（内置 set +u 规避 ROS setup 的未定义变量）；停止用 kill+pgrep 精确匹配（避开 pkill 自匹配坑）
 
 服务自测：`ros2 service call /scanner/query std_srvs/srv/Trigger`；`ros2 topic echo /scanner/barcode`。

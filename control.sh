@@ -10,6 +10,7 @@
 #   qrc                                             调 /scanner/query（原样整条，同 scanq）
 #   qrb                                             调 /scanner/query_parsed（解析后：编号+4情况映射）
 #   camera <命令>                                 调 /camera/command（默认 TASK1，可接 TASK2/SNAPSHOT/TRACK/IRRIGATION）
+#   pos                                            实时显示发给上位机的 #POS 帧（odom 计程，无串口也能看）
 #   tf                                            查看 TF map->base_link 坐标
 #   hz                                            查看 /scan 发布频率
 #   oc                                            调 /obstacle/check 服务（前方矩形障碍检测）
@@ -41,6 +42,7 @@ usage() {
     echo "  qrc                                             调用 /scanner/query（原样整条）"
     echo "  qrb                                             调用 /scanner/query_parsed（编号+4情况映射，如 12462213）"
     echo "  camera <命令>                                    调用 /camera/command（默认 TASK1，可接 TASK2/SNAPSHOT/TRACK/IRRIGATION）"
+    echo "  pos                                               实时显示发给上位机的 #POS 帧（odom 计程，无串口也能看）"
     echo "  tf                                               查看 TF map->base_link"
     echo "  hz                                               查看 /scan 频率"
     echo "  oc                                               调用 /obstacle/check（前方矩形障碍检测）"
@@ -171,6 +173,12 @@ cmd_camera() { # [命令名]
     timeout 25 ros2 service call /camera/command openmv_msgs/srv/Command "{command: '$sub'}" 2>&1 | tail -6
 }
 
+# 快捷：实时查看发给上位机的 #POS 帧（与 bridge 同源同换算，无串口也能看）
+cmd_pos() {
+    env_pre
+    python3 "$ROOT/tool/pos.py"
+}
+
 # 快捷：当前坐标
 cmd_tf() {
     env_pre
@@ -239,6 +247,7 @@ case "$cmd" in
     qrb) cmd_qrb ;;
     camera) cmd_camera "${1:-}" ;;
     tf) cmd_tf ;;
+    pos) cmd_pos ;;
     hz) cmd_hz ;;
     oc) cmd_oc ;;
     mq) cmd_mq ;;

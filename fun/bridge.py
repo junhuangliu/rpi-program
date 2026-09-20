@@ -11,16 +11,22 @@
                   OBS      -> /obstacle/check（前方最近障碍 x,y，base_link 系；无则 0.0,0.0）
 
 用法：
-  python3 start.py bridge -p/--port <串口> [-b/--baudrate 115200] [-d/--debug]
+  python3 start.py bridge -p/--port <串口> [-b/--baudrate 115200] [-d/--debug] [-f/--frame odom|map]
 
   默认帧协议（占位，待上位机侧确认后调整 FRAME_HEAD/FRAME_TAIL/FIELD_SEP）：
-    下行坐标:  #POS,x,y,yaw   （无 SLAM 时 #POS,no_tf；整车初始系：初始 0,0,0，
+    下行坐标:  #POS,x,y,yaw   （无 TF 时 #POS,no_tf；整车初始系：初始 0,0,0，
                x=初始前方、y=初始左侧、yaw 归约 [-π,π]，左转为负）
     上行命令:  #<命令>[,参数...]     例: #TASK1 / #QR
     回传结果:  #<对应指令>,<内容>   例: #QRB,12462213$ / #OBS,0.233,0.066$
               （未识别命令回 #UNKNOWN,<命令>；服务异常回 #<指令>,ERROR:<原因>）
     行尾:      \r\n
   命令表以 self.commands 为准（待用户提供完整命令表后扩充）。
+
+计程来源（-f/--frame）：
+  - odom（默认，推荐计程）：读 odom->base_link（laser_scan_matcher 激光里程计），
+    实测直推 50cm ≈0.50m 准；slam_toolbox 在线修正会把 map 系位姿吸回(~10%)，
+    故计程/上位机显示用 odom 系
+  - map（建图全局系）：读 map->base_link，含回环/全局优化修正，位移可能缩水
 
 说明：
   - 上位机为 USB 虚拟串口（STM32 Car）；未指定 -p 时自动识别 STM32 串口，
@@ -29,7 +35,6 @@
 """
 
 import argparse
-import math
 import os
 import sys
 import threading
@@ -37,7 +42,7 @@ import time
 
 import serial
 
-from fun import serial_ports
+from fun import coords, serial_ports
 
 # ================= 帧协议常量（占位，待上位机确认后修改） =================
 FRAME_HEAD = "#"          # 帧头
@@ -65,19 +70,15 @@ except ModuleNotFoundError as e:
     _ROS_ERR = e
 
 
-def quat_to_yaw(q) -> float:
-    """四元数转偏航角（弧度）。"""
-    x, y, z, w = q.x, q.y, q.z, q.w
-    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-
-
 class BridgeNode(Node):
     """上位机桥接节点：10Hz 坐标下行 + 命令上行转发服务。"""
 
-    def __init__(self, port: str, baudrate: int, debug: bool = False) -> None:
+    def __init__(self, port: str, baudrate: int, frame: str = "map",
+                 debug: bool = False) -> None:
         super().__init__("host_bridge")
         self.port = port
         self.debug = debug
+        self.tf_frame = frame          # 计程坐标帧: odom(激光里程计,准) 或 map(全局建图系)
         self.ser = serial.Serial(port, baudrate, timeout=0.2)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -105,7 +106,11 @@ class BridgeNode(Node):
 
     # ---------------- 下行：周期坐标 ----------------
     def on_pos_timer(self) -> None:
-        """10Hz：读取 map->base_link TF，转整车初始坐标系后发送坐标帧。
+        """10Hz：读取 TF 计程位姿，转整车初始坐标系后发送坐标帧。
+
+        计程坐标系由 self.tf_frame 决定：
+          - odom : odom->base_link（laser_scan_matcher 激光里程计，位移准）
+          - map  : map->base_link（slam_toolbox 全局修正，位移可能缩水）
 
         整车初始系：以首次拿到 TF 的时刻为原点/零角度（启动即 0,0,0）。
           - x 正 = 初始时刻车头前方；y 正 = 初始时刻左侧
@@ -113,21 +118,15 @@ class BridgeNode(Node):
         首次之后的 TF 换算：相对位移 (dx,dy) 绕 z 转 -yaw0 到初始系。
         """
         try:
-            f = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+            f = self.tf_buffer.lookup_transform(self.tf_frame, "base_link", rclpy.time.Time())
             t, q = f.transform.translation, f.transform.rotation
             x, y = t.x, t.y
-            yaw = quat_to_yaw(q)
+            yaw = coords.quat_to_yaw(q)
             if self._origin is None:
                 self._origin = (x, y, yaw)
                 self.get_logger().info(
                     f"记录整车初始位姿: x0={x:.3f}, y0={y:.3f}, yaw0={yaw:.3f}")
-            x0, y0, yaw0 = self._origin
-            dx, dy = x - x0, y - y0
-            cos0, sin0 = math.cos(yaw0), math.sin(yaw0)
-            x_f = dx * cos0 + dy * sin0
-            y_f = -dx * sin0 + dy * cos0
-            yaw_f = -math.atan2(
-                math.sin(yaw - yaw0), math.cos(yaw - yaw0))  # [-π, π]
+            x_f, y_f, yaw_f = coords.rel_to_origin(x, y, yaw, self._origin)
             payload = (
                 f"POS{FIELD_SEP}{x_f:.3f}{FIELD_SEP}{y_f:.3f}"
                 f"{FIELD_SEP}{yaw_f:.3f}")
@@ -258,6 +257,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="上位机串口桥接节点")
     parser.add_argument("-p", "--port", required=False, help="上位机串口")
     parser.add_argument("-b", "--baudrate", type=int, default=BAUDRATE, help=f"波特率(默认 {BAUDRATE})")
+    parser.add_argument("-f", "--frame", choices=("map", "odom"), default="odom",
+                        help="计程坐标帧（默认 odom：激光里程计，位移准；map：slam 全局修正）")
     parser.add_argument("-d", "--debug", action="store_true", help="调试模式：打印每帧发送内容")
     args, _ = parser.parse_known_args()
 
@@ -268,7 +269,7 @@ def main() -> None:
 
     rclpy.init()
     executor = MultiThreadedExecutor()
-    node = BridgeNode(port, args.baudrate, args.debug)
+    node = BridgeNode(port, args.baudrate, args.frame, args.debug)
     try:
         executor.add_node(node)
         rclpy.spin(node, executor=executor)

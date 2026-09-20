@@ -9,7 +9,7 @@
 #   scanq                                         调 /scanner/query 服务
 #   qrc                                             调 /scanner/query（原样整条，同 scanq）
 #   qrb                                             调 /scanner/query_parsed（解析后：编号+4情况映射）
-#   camera <命令>                                 调 /camera/command（默认 TASK1，可接 TRACK/SNAPSHOT/IRRIGATION）
+#   camera <命令>                                 调 /camera/command（默认 TASK1，可接 TASK2/SNAPSHOT/TRACK/IRRIGATION）
 #   tf                                            查看 TF map->base_link 坐标
 #   hz                                            查看 /scan 发布频率
 #   oc                                            调 /obstacle/check 服务（前方矩形障碍检测）
@@ -40,7 +40,7 @@ usage() {
     echo "  scanq                                           调用 /scanner/query"
     echo "  qrc                                             调用 /scanner/query（原样整条）"
     echo "  qrb                                             调用 /scanner/query_parsed（编号+4情况映射，如 12462213）"
-    echo "  camera <命令>                                    调用 /camera/command（默认 TASK1）"
+    echo "  camera <命令>                                    调用 /camera/command（默认 TASK1，可接 TASK2/SNAPSHOT/TRACK/IRRIGATION）"
     echo "  tf                                               查看 TF map->base_link"
     echo "  hz                                               查看 /scan 频率"
     echo "  oc                                               调用 /obstacle/check（前方矩形障碍检测）"
@@ -159,7 +159,7 @@ cmd_qrb() {
     timeout 8 ros2 service call /scanner/query_parsed std_srvs/srv/Trigger 2>&1 | tail -5
 }
 
-# 快捷：调用摄像头命令（TASK1/SNAPSHOT/TRACK/IRRIGATION，默认 TASK1）
+# 快捷：调用摄像头命令（TASK1/TASK2/SNAPSHOT/TRACK/IRRIGATION，默认 TASK1）
 cmd_camera() { # [命令名]
     env_pre
     local sub="${1:-TASK1}"

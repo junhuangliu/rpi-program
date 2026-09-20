@@ -14,10 +14,10 @@
     ros2 service call /camera/command openmv_msgs/srv/Command "{command: 'TASK1'}"
 
 说明：
-  - 命令经 USB REPL 发送（\\r\\n 结尾），OpenMV 需运行 main.py 命令交互模式
-  - main.py 中 send() 的结果帧 #<payload>$ 走 UART3 物理引脚，USB 读不到；
-    本节点读取的是 print 回显（如 TASK1_OK: 123456 / TASK1_TIMEOUT: 000000）
-  - 命令执行耗时由 -t 控制（默认 12s，需覆盖 TASK1 最多 3s + 回显时间）
+- 命令经 USB REPL 发送（\\r\\n 结尾），OpenMV 需运行 main.py 命令交互模式
+   - main.py 中 send() 的结果帧 #<payload>$ 走 UART3 物理引脚，USB 读不到；
+     本节点读取的是 print 回显（如 TASK1_OK: 123456 / TASK1_TIMEOUT: 000000 / TASK2_OK: ...）
+   - 命令执行耗时由 -t 控制（默认 12s，需覆盖 TASK1/TASK2 最多 3s + 回显时间）
 """
 
 import argparse
@@ -55,6 +55,12 @@ def classify_line(line: str) -> tuple[bool, str] | None:
     m = re.match(r"TASK1_TIMEOUT:\s*(.+)$", line)
     if m:
         return False, f"TASK1_TIMEOUT: {m.group(1)}"
+    m = re.match(r"TASK2_OK:\s*(.+)$", line)
+    if m:
+        return True, f"TASK2_OK: {m.group(1)}"
+    m = re.match(r"TASK2_TIMEOUT:\s*(.+)$", line)
+    if m:
+        return False, f"TASK2_TIMEOUT: {m.group(1)}"
     if line in ("SNAPSHOT_OK", "TRACK_OK", "IRRIGATION_DONE"):
         return True, line
     if line == "UNKNOWN":

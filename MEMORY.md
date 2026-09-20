@@ -45,7 +45,9 @@
   - **条码结束符=Tab**：已把扫码枪"后缀"配置成 Tab(0x09)，scanner 按 `\t` 分帧（`-e` 可改，回车模式用 `-e '\n'`），**整条二维码内容原样保留（不做任何分割/规整）**，一个二维码=一条发布；内容里的 `\r`/换行由消费端自行按需 split
   - **解析服务 `/scanner/query_parsed`**：对最近扫码做结构化解析（编号+4行情况→编号+映射拼接，如 `12462213`）；映射=轻微干旱1/一般干旱2/严重干旱3；段数≠5、编号非数字、未知情况均整体返回 `ERROR:<原因>`（对应上位机 `#QRB$`）
 - OpenMV N6 摄像头：USB 枚举为 `MicroPython Pyboard Virtual Comm Port`，VID:PID `37c5:1206`，by-id 名含 `MicroPython`；`fun/serial_ports.py::find_openmv_port()` 识别
-- OpenMV 通信协议：命令经 REPL（USB VCP，`/\r\n` 结尾）发送，`print()` 回显（`TASK1_OK: xxxxxx` / `TASK1_TIMEOUT: xxxxxx` / `SNAPSHOT_OK` 等）；`send()` 的 `#<payload>$` 帧走 UART3 物理引脚，USB 收不到
+- OpenMV 通信协议：命令经 REPL（USB VCP，`/\r\n` 结尾）发送，`print()` 回显（`TASK1_OK: xxxxxx` / `TASK1_TIMEOUT: xxxxxx` / `TASK2_OK: ...` / `TASK2_TIMEOUT: ...` / `SNAPSHOT_OK` 等）；`send()` 的 `#<payload>$` 帧走 UART3 物理引脚，USB 收不到
+- OpenMV main.py 职责分配：`openmv_n6/main.py`（命令交互循环，无 YOLO；摄像头统一 `sensor` RGB565/QVGA）+ `test1.py`（TASK1 六色矩形，`sensor.snapshot()` 抓帧）均纳入项目并同步盘上 PYBFLASH；TASK2 二维码识别用 `img.find_qrcodes()` + `code.payload()`
+- **TASK1 检测范围 = 中央 80% ROI**（`test1.py` 内 `img.copy()` 后 `img.crop(roi=ROI)`，QP 下为 (32,20,256,160)）：**N6 的 `Image.crop` 是就地修改且 ROI 须用关键字传参（`crop(roi=...)`）**，故先 `copy()` 再裁剪，避免破坏帧缓冲；ROI 写死中央 80%（四周各裁 10%），用于屏蔽边缘同色背景串入
 - ROS 任务 vs 事件流约定：短任务/一问一答 = Service（OpenMV 用 `openmv_msgs/srv/Command`）；持续事件流 = Topic（扫码 `/scanner/barcode`）；长流程/进度 = Action
 - OpenMV 服务包：`~/ros2_ws/src/openmv_msgs`（`srv/Command.srv`），`colcon build` 后须 source `~/ros2_ws/install/setup.bash`；节点 `fun/camera.py` 提供 `/camera/command` service + `/camera/result` 话题
 - `#POS` 帧 = **整车初始坐标系**（`fun/bridge.py` on_pos_timer）：首次有 TF 记录 origin `(x0,y0,yaw0)`，之后位移绕 `-yaw0` 旋转到初始系（x=初始车头前方、y=初始左侧），**启动即 `#POS,0,0,0`**；角度 `yaw_f=-atan2(sin(yaw-yaw0),cos(yaw-yaw0))` 归约 **[-π,π]**、导航惯例左转负。注意：SLAM 重建 map 后需重启 bridge 复位 origin；yaw0 固定 π（雷达反装 static TF）
@@ -81,7 +83,7 @@
 | 开雷达 | `python3 start.py lidar` | 识别雷达→开 rviz |
 | 建图 | `python3 start.py slam` | 6 节点手持建图（含障碍检测），串口自动识别 |
 | 扫码 | `python3 start.py scanner` | 广播 `/scanner/barcode` + 服务 `/scanner/query` |
-| OpenMV 任务 | `python3 start.py camera` | 服务 `/camera/command`(openmv_msgs)，调用例：`ros2 service call /camera/command openmv_msgs/srv/Command "{command: 'TASK1'}"` |
+| OpenMV 任务 | `python3 start.py camera` | 服务 `/camera/command`(openmv_msgs)，调用例：`ros2 service call /camera/command openmv_msgs/srv/Command "{command: 'TASK1'}"`；`./control.sh camera TASK2` 可调二维码识别 |
 | 障碍检测 | `python3 start.py obstacle` | 服务 `/obstacle/check`（默认随 slam 拉起） |
 | MaixCAM 数据 | `python3 start.py maixcam [-p 8080]` | TCP 8080 收数据→话题 `/maixcam/data` + 服务 `/maixcam/query` |
 | 桥接上位机 | `python3 start.py bridge [-p /dev/ttyACMx]` | 自动识别 STM32 Car 串口，`-p` 可覆盖 |

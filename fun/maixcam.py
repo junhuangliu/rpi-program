@@ -2,18 +2,20 @@
 """MaixCAM 网络数据接收节点。
 
 功能：
-  1. 启动 TCP Server（默认 0.0.0.0:8080），等待 MaixCAM 主动连接
+  1. 启动 TCP Server（默认 0.0.0.0:6000），等待 MaixCAM 主动连接
   2. 按行（\\n）分帧接收 MaixCAM 数据，每条处理为：
        缓存最近一条 + 终端打印 + 追加 maixcam.log + 发布 /maixcam/data
   3. 提供 ROS2 Service /maixcam/query（std_srvs/srv/Trigger）：
        返回最近收到的一条数据；从未收到返回 success=false + "NO_DATA"
-  4. 健壮性：
+  4. 健壮性（长连接场景）：
        - accept 循环在独立线程持续监听，支持多连接与任意重连（进程不退出）
-       - 每连接独立线程 + recv 超时（默认 5s）：MaixCAM 网络异常消失（TCP
-         半开）时超时主动关闭该连接，不影响后续连接接管
+       - 每连接独立线程，默认不设 recv 超时：数据不定时到达时连接持续保持；
+         同时启用 TCP keepalive，MaixCAM 掉电/拔线（无 FIN）时由内核在
+         keepalive 探测失败后自动断开，不影响后续连接接管
+       - 如需要，可用 -t <秒> 设定 recv 超时（0 或负值 = 不超时）
 
 用法：
-  python3 start.py maixcam [-p/--port 8080] [-t/--timeout 5]
+  python3 start.py maixcam [-p/--port 6000] [-t/--timeout 秒]
 
   MaixCAM 侧只需连接 <树莓派IP>:8080 并按行发送数据，例如：
     import socket
@@ -42,8 +44,8 @@ except ModuleNotFoundError as e:
     _ROS_ERR = e
 
 HOST = "0.0.0.0"                 # 监听所有网卡
-DEFAULT_PORT = 8080
-RECV_TIMEOUT = 5.0               # 连接 recv 超时(s)，防 TCP 半开卡死
+DEFAULT_PORT = 6000
+RECV_TIMEOUT = None              # 默认不超时=持续连接；-t 秒可设 recv 超时限制
 TOPIC = "maixcam/data"
 QUERY_SERVICE = "maixcam/query"
 LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -73,7 +75,9 @@ class MaixCAMNode(Node):
         self._acceptor.start()
         self.get_logger().info(
             f"TCP Server 已启动: {host}:{port}, 发布话题 /{TOPIC}, "
-            f"服务 /{QUERY_SERVICE}, recv 超时 {recv_timeout}s, 等待 MaixCAM 连接...")
+            f"服务 /{QUERY_SERVICE}, keepalive 已启用, "
+            f"recv 超时 {'不超时(持续连接)' if self.recv_timeout is None else f'{self.recv_timeout}s'}, "
+            "等待 MaixCAM 连接...")
 
     def accept_loop(self) -> None:
         """持续 accept，每个连接开独立线程处理；监听直到退出。"""
@@ -91,6 +95,14 @@ class MaixCAMNode(Node):
 
     def handle_client(self, conn: socket.socket, addr) -> None:
         """处理单个连接：按行分帧接收，每条处理；断开/超时/异常后关闭连接。"""
+        # 长连接 keepalive：掉电/拔线（无 FIN）由内核探测后断开，不设 recv 超时则永久保持
+        try:
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6)
+        except OSError:
+            pass
         conn.settimeout(self.recv_timeout)
         buffer = ""
         try:
@@ -164,8 +176,10 @@ def main() -> None:
     parser.add_argument("-p", "--port", type=int, default=DEFAULT_PORT,
                         help=f"TCP 监听端口(默认 {DEFAULT_PORT})")
     parser.add_argument("-t", "--timeout", type=float, default=RECV_TIMEOUT,
-                        help=f"连接 recv 超时秒(默认 {RECV_TIMEOUT})，防 TCP 半开")
+                        help="连接 recv 超时秒(默认不超时=持续连接；0/缺省=不超时，>0 为秒数)")
     args, _ = parser.parse_known_args()
+    if args.timeout is not None and args.timeout <= 0:
+        args.timeout = None
 
     rclpy.init()
     node = MaixCAMNode(HOST, args.port, args.timeout)

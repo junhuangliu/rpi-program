@@ -20,6 +20,7 @@
 
 - GitHub 加速：使用 dev-sidecar（sudo dss start），验证命令详情见项目 note.txt
 - 日志体系：项目内自管理，daily 日志在 `instruction/daily/YYYY-MM-DD.md`，规则见 `instruction/LOG.md`
+- MaixCAM 网络节点（`fun/maixcam.py`）**默认长连接**：不设 recv 超时（持续连接，数据不定时到达不踢）+ TCP keepalive（KEEPIDLE 60s/INTVL 10s/CNT 6，掉电拔线由内核断开）。曾用 5s recv 超时会误杀"不定时发数据"的连接；`-t <秒>` 可恢复限定超时。数据须以 `\n` 结尾（按行分帧），无换行会攒在缓冲区不处理
 - 雷达串口权限：已配置 `/etc/udev/rules.d/rplidar.rules`（匹配 10c4:ea60，`MODE:=0777`）。若 `/dev/ttyUSB0` 权限异常（非 777），重插 USB 或执行 `sudo udevadm control --reload-rules && sudo udevadm trigger` 使其生效
 - 雷达屏蔽最近距离：`rplidar_ros` 的 `range_min` **硬编码**在 `~/ros2_ws/src/rplidar_ros/src/rplidar_node.cpp:257`（当前 `0.20`，即 20cm 内屏蔽），无 ROS 参数可覆盖；`range_max` 从硬件自动读取（C1 Standard 16.0m）。改法见项目 `note.txt`（改源码→colcon build→重启 slam）
 - 雷达反装朝向：RPLIDAR 逆装（激光 x+ 指向机器人**后方**）。坐标系关键配置（`fun/slam_launch.py`）：
@@ -89,7 +90,8 @@
 | 扫码 | `python3 start.py scanner` | 广播 `/scanner/barcode` + 服务 `/scanner/query` |
 | OpenMV 任务 | `python3 start.py camera` | 服务 `/camera/command`(openmv_msgs)，调用例：`ros2 service call /camera/command openmv_msgs/srv/Command "{command: 'TASK1'}"`；`./control.sh camera TASK2` 可调二维码识别 |
 | 障碍检测 | `python3 start.py obstacle` | 服务 `/obstacle/check`（默认随 slam 拉起） |
-| MaixCAM 数据 | `python3 start.py maixcam [-p 8080]` | TCP 8080 收数据→话题 `/maixcam/data` + 服务 `/maixcam/query` |
+| MaixCAM 数据 | `python3 start.py maixcam [-p 6000]` | TCP 6000 收数据→话题 `/maixcam/data` + 服务 `/maixcam/query` + 追加 `maixcam.log` |
+| MaixCAM 日志 | `tail -f /tmp/maixcam.log` | 节点运行日志（连接/发布）；**数据日志**在项目根 `maixcam.log`。注意拼写是 `maixcam`，误拼 `maxicam` 是另一文件 |
 | 桥接上位机 | `python3 start.py bridge [-p /dev/ttyACMx]` | 自动识别 STM32 Car 串口，`-p` 可覆盖 |
 
 ## 一键控制脚本 control.sh

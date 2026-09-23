@@ -5,3 +5,6 @@ camera.log
 maixcam.log
 snapshots/
 maixcam_latest.jpg
+recognize_debug.jpg
+models/**/*.onnx
+models/**/*.pt

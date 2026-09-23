@@ -8,7 +8,8 @@
                   QR / QRC -> /scanner/query（最近条码原样）
                   QRB      -> /scanner/query_parsed（编号+4情况映射拼接，如 12462213）
                   QRA      -> /maixcam/query（最近一条 MaixCAM 数据，无数据回传 NO_DATA）
-                  REC      -> /maixcam/snap（让 MaixCAM 拍照取图；成功回传 1，失败回传 0）
+                  REC      -> /maixcam/snap 拍照 + /recognize/run 两阶段识别；
+                             成功回传类别（labels.txt，当前 1/2/3），失败回传 0
                   OBS      -> /obstacle/check（前方最近障碍 x,y，base_link 系；无则 0.0,0.0）
 
 用法：
@@ -88,6 +89,7 @@ class BridgeNode(Node):
         self.cli_scanner_parsed = self.create_client(Trigger, "scanner/query_parsed")
         self.cli_maixcam = self.create_client(Trigger, "maixcam/query")
         self.cli_snap = self.create_client(Trigger, "maixcam/snap")
+        self.cli_recognize = self.create_client(Trigger, "recognize/run")
         self.cli_obstacle = self.create_client(ObstacleCheck, "obstacle/check")
         self.commands = {
             "TASK1": self._cmd_camera,
@@ -205,15 +207,23 @@ class BridgeNode(Node):
         return resp.message
 
     def _cmd_recognize(self, fields: list[str]) -> str:
-        """调用 /maixcam/snap 让 MaixCAM 拍照取图；成功回传 1，失败回传 0。
+        """上位机 REC：先 /maixcam/snap 拍照取图，再 /recognize/run 识别。
 
-        （识别逻辑后续接入：拿到图片路径后在此替换返回值。）
+        成功回传类别名（labels.txt，当前 1/2/3）；拍照失败、识别为 0 或模型缺失一律回传 "0"。
         """
         if not self.cli_snap.wait_for_service(timeout_sec=5.0):
-            raise RuntimeError("maixcam/snap 服务不可用")
-        fut = self.cli_snap.call_async(Trigger.Request())
+            self.get_logger().warn("REC: maixcam/snap 服务不可用")
+            return "0"
+        snap_fut = self.cli_snap.call_async(Trigger.Request())
+        snap_resp = self._wait_future(snap_fut, SCANNER_TIMEOUT)
+        if not snap_resp.success:
+            return "0"
+        if not self.cli_recognize.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn("REC: recognize/run 服务不可用")
+            return "0"
+        fut = self.cli_recognize.call_async(Trigger.Request())
         resp = self._wait_future(fut, SCANNER_TIMEOUT)
-        return "1" if resp.success else "0"
+        return resp.message if resp.success else "0"
 
     def _cmd_obstacle(self, fields: list[str]) -> str:
         """调用 /obstacle/check 获取前方障碍（base_link 系，前方=+x）；最近簇回 x,y，

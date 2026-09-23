@@ -15,6 +15,9 @@
 #   hz                                            查看 /scan 发布频率
 #   oc                                            调 /obstacle/check 服务（前方矩形障碍检测）
 #   mq                                            调 /maixcam/query（最近一条 MaixCAM 数据）
+#   ms <消息>                                    向 MaixCAM 下发消息
+#   mc                                            调 /maixcam/snap 拍照取图
+#   rc                                            调 /recognize/run 两阶段识别（1/2/3 或 0）
 #   svc                                           列出关键服务是否在线
 #
 # 说明:
@@ -27,7 +30,7 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_DIR="/tmp/rpi-pids"
 mkdir -p "$PID_DIR"
-FUNCS_ALL=(slam scanner camera lidar bridge maixcam)
+FUNCS_ALL=(slam scanner camera lidar bridge maixcam recognize)
 
 # 用法提示
 usage() {
@@ -49,6 +52,7 @@ usage() {
     echo "  mq                                               调用 /maixcam/query（最近一条 MaixCAM 数据）"
     echo "  ms <消息>                                        向 MaixCAM 下发消息（/maixcam/send，自动补 \n），如 ms ping"
     echo "  mc                                               从 MaixCAM 拍照取图（/maixcam/snap，返回图片路径）"
+    echo "  rc                                               调 /recognize/run（两阶段识别 maixcam_latest.jpg，返回 1/2/3 或 0；标注图存 recognize_debug.jpg）"
     echo "  svc                                              列出关键服务"
 }
 
@@ -221,13 +225,19 @@ cmd_mc() {
     timeout 12 ros2 service call /maixcam/snap std_srvs/srv/Trigger 2>&1 | tail -5
 }
 
+# 快捷：两阶段识别最近一张 MaixCAM 图片（/recognize/run）
+cmd_rc() {
+    env_pre
+    timeout 20 ros2 service call /recognize/run std_srvs/srv/Trigger 2>&1 | tail -5
+}
+
 # 快捷：关键服务在线检查
 cmd_svc() {
     env_pre
     echo "关键服务:"
     local s alive
     alive=$(timeout 6 ros2 service list 2>/dev/null)
-    for s in /scanner/query /scanner/query_parsed /camera/command /obstacle/check /maixcam/query /slam_toolbox/get_state /slam_toolbox/save_map; do
+    for s in /scanner/query /scanner/query_parsed /camera/command /obstacle/check /maixcam/query /recognize/run /slam_toolbox/get_state /slam_toolbox/save_map; do
         if echo "$alive" | grep -qx "$s" >/dev/null; then
             echo "  [OK]    $s"
         else
@@ -251,7 +261,7 @@ case "$cmd" in
         ;;
     stop)
         if [ "${1:-}" = "all" ]; then
-            for fn in bridge lidar camera scanner slam; do stop_one "$fn"; done
+            for fn in recognize bridge lidar camera scanner slam; do stop_one "$fn"; done
         elif [ -n "${1:-}" ]; then
             stop_one "$1"
         else
@@ -271,6 +281,7 @@ case "$cmd" in
     mq) cmd_mq ;;
     ms) cmd_ms "${1:-}" ;;
     mc) cmd_mc ;;
+    rc) cmd_rc ;;
     svc) cmd_svc ;;
     *) usage ;;
 esac

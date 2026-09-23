@@ -61,9 +61,13 @@
   - 上行 `#<命令>$` → 命令表 `self.commands` 调服务 → 回传 `#RES,<内容>$`
   - ⚠️ **STM32 帧尾 `$` 后带 NUL 字节 `\x00`**（实测 `text='#QRB$\x00'`，会导致 `endswith("$")` 失败、命令 UNKNOWN）；`read_loop` 解析前已 `replace("\x00","")` 剔除
   - `-d` 调试日志：`[RX] <收到行>`（未知命令附 `text=... fields=...`）、`[TX] #RES,...`
-  - 命令表：TASK1→/camera/command（OpenMV）；QR/QRC→/scanner/query（原样整条）；QRB→/scanner/query_parsed（解析后：编号+4行情况映射，如 12462213）；QRA→/maixcam/query（最近一条 MaixCAM 数据，无数据 `NO_DATA`）；REC→/maixcam/snap（拍照取图，成功回 `1`、失败回 `0`，识别结果后续接入）；OBS→/obstacle/check（最近障碍 `x,y`，base_link 系；无障碍/无扫描 `0.0,0.0`）；帧头尾/分隔符是常量（FRAME_HEAD/TAIL/FIELD_SEP），协议确定后改
+  - 命令表：TASK1→/camera/command（OpenMV）；QR/QRC→/scanner/query（原样整条）；QRB→/scanner/query_parsed（解析后：编号+4行情况映射，如 12462213）；QRA→/maixcam/query（最近一条 MaixCAM 数据，无数据 `NO_DATA`）；REC→拍照`/maixcam/snap`+识别`/recognize/run`，成功回类别（labels.txt 当前 1/2/3），任何失败回 `0`；OBS→/obstacle/check（最近障碍 `x,y`，base_link 系；无障碍/无扫描 `0.0,0.0`）；帧头尾/分隔符是常量（FRAME_HEAD/TAIL/FIELD_SEP），协议确定后改
   - 端口用 `-p` 指定；需 MultiThreadedExecutor（服务阻塞不挡 10Hz）；rclpy Future 无 `timeout_sec` 参数，用轮询 `done()`+超时
 - 串口识别加固：`find_port()` 按 by-id 关键词命中**多个**候选（如同型号多块 CP210）时不再猜测，打印全部并返回 None 提示用 `-p` 显式指定；`slam`/`open_lidar` 均支持 `-p/--port` 覆盖串口
+- 两阶段识别节点 `fun/recognize.py`（`/recognize/run`，std_srvs/Trigger，读 `maixcam_latest.jpg`）：
+  - 阶段一 YOLO ONNX（`models/detect/model.onnx`，默认 640 边、conf 0.5、NMS iou 0.45，letterbox 预处理，取最高置信框 bbox 直裁）；阶段二 分类 ONNX（`models/classify/model.onnx`，默认 224，argmax→`models/classify/labels.txt` 类别）；返回类别/0、ERR_IMG、ERR_MODEL
+  - 依赖 `onnxruntime`（本机用 `pip install --break-system-packages onnxruntime` 装的，PEP 668 环境）；权重不入库（`.gitignore` 忽略 `models/**/*.{onnx,pt}`），PC 训练后 `yolo export format=onnx` 放入对应路径
+  - ⚠️ start.py 内联调用各 main 时 `sys.argv` 仍含功能名，argparse 必须用 `parse_known_args()`（obstacle 等模块同理），直接 `parse_args()` 会报 unrecognized arguments
 - MaixCAM 数据接收节点 `fun/maixcam.py`（独立于 USB 外设）：
   - **TCP Server** 监听 `0.0.0.0:8080`（`-p/--port` 可改），MaixCAM **主动连接**并按行（`\n`）发送数据（参考代码逻辑：accept 循环 + 每连接一线程）
   - 每条数据：缓存最近一条 + 终端打印 + 追加 `maixcam.log` + 发布 `/maixcam/data`（std_msgs/String）
@@ -94,6 +98,7 @@
 | MaixCAM 取图 | `./control.sh mc`（或 `ros2 service call /maixcam/snap std_srvs/srv/Trigger`） | 自动发 `mode=pic`+`snap`，等新帧 JPEG 存 `snapshots/` + 覆盖 `maixcam_latest.jpg`，发布 `/maixcam/photo`；成功返回图片路径 |
 | MaixCAM 下发 | `./control.sh ms <消息>`（或 `ros2 topic pub /maixcam/send std_msgs/String "{data: 'xx'}"`） | 沿已建立的连接把消息发回 MaixCAM，自动补 `\n`；MaixCAM 端需 `recv` 接收 |
 | MaixCAM 日志 | `tail -f /tmp/maixcam.log` | 节点运行日志（连接/发布）；**数据日志**在项目根 `maixcam.log`。注意拼写是 `maixcam`，误拼 `maxicam` 是另一文件 |
+| 农田图识别 | `./control.sh rc`（或 `ros2 service call /recognize/run std_srvs/srv/Trigger`） | 两阶段 ONNX：检测定位图区域（bbox 直裁）→ 分类 → 回 labels.txt 类别（1/2/3）；无结果回 0、缺权重 ERR_MODEL、读图失败 ERR_IMG |
 | 桥接上位机 | `python3 start.py bridge [-p /dev/ttyACMx]` | 自动识别 STM32 Car 串口，`-p` 可覆盖 |
 
 ## 一键控制脚本 control.sh

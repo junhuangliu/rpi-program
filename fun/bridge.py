@@ -8,6 +8,7 @@
                   QR / QRC -> /scanner/query（最近条码原样）
                   QRB      -> /scanner/query_parsed（编号+4情况映射拼接，如 12462213）
                   QRA      -> /maixcam/query（最近一条 MaixCAM 数据，无数据回传 NO_DATA）
+                  REC      -> /maixcam/snap（让 MaixCAM 拍照取图；成功回传 1，失败回传 0）
                   OBS      -> /obstacle/check（前方最近障碍 x,y，base_link 系；无则 0.0,0.0）
 
 用法：
@@ -86,6 +87,7 @@ class BridgeNode(Node):
         self.cli_scanner = self.create_client(Trigger, "scanner/query")
         self.cli_scanner_parsed = self.create_client(Trigger, "scanner/query_parsed")
         self.cli_maixcam = self.create_client(Trigger, "maixcam/query")
+        self.cli_snap = self.create_client(Trigger, "maixcam/snap")
         self.cli_obstacle = self.create_client(ObstacleCheck, "obstacle/check")
         self.commands = {
             "TASK1": self._cmd_camera,
@@ -93,6 +95,7 @@ class BridgeNode(Node):
             "QRC": self._cmd_scanner,
             "QRB": self._cmd_scanner_parsed,
             "QRA": self._cmd_maixcam,
+            "REC": self._cmd_recognize,
             "OBS": self._cmd_obstacle,
         }
         self.timer = self.create_timer(1.0 / POS_RATE_HZ, self.on_pos_timer)
@@ -200,6 +203,17 @@ class BridgeNode(Node):
         fut = self.cli_maixcam.call_async(Trigger.Request())
         resp = self._wait_future(fut, SCANNER_TIMEOUT)
         return resp.message
+
+    def _cmd_recognize(self, fields: list[str]) -> str:
+        """调用 /maixcam/snap 让 MaixCAM 拍照取图；成功回传 1，失败回传 0。
+
+        （识别逻辑后续接入：拿到图片路径后在此替换返回值。）
+        """
+        if not self.cli_snap.wait_for_service(timeout_sec=5.0):
+            raise RuntimeError("maixcam/snap 服务不可用")
+        fut = self.cli_snap.call_async(Trigger.Request())
+        resp = self._wait_future(fut, SCANNER_TIMEOUT)
+        return "1" if resp.success else "0"
 
     def _cmd_obstacle(self, fields: list[str]) -> str:
         """调用 /obstacle/check 获取前方障碍（base_link 系，前方=+x）；最近簇回 x,y，

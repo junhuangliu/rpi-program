@@ -47,6 +47,8 @@ usage() {
     echo "  hz                                               查看 /scan 频率"
     echo "  oc                                               调用 /obstacle/check（前方矩形障碍检测）"
     echo "  mq                                               调用 /maixcam/query（最近一条 MaixCAM 数据）"
+    echo "  ms <消息>                                        向 MaixCAM 下发消息（/maixcam/send，自动补 \n），如 ms ping"
+    echo "  mc                                               从 MaixCAM 拍照取图（/maixcam/snap，返回图片路径）"
     echo "  svc                                              列出关键服务"
 }
 
@@ -203,6 +205,22 @@ cmd_mq() {
     timeout 8 ros2 service call /maixcam/query std_srvs/srv/Trigger 2>&1 | tail -5
 }
 
+# 快捷：向 MaixCAM 下发消息（经 /maixcam/send；消息里的 \n 会转成真实换行，缺省补 \n）
+cmd_ms() { # [消息内容]
+    env_pre
+    if [ -z "${1:-}" ]; then
+        echo "[用法] $0 ms <消息内容>，如: $0 ms ping"
+        return 1
+    fi
+    timeout 8 ros2 topic pub -1 /maixcam/send std_msgs/String "data: \"$1\"" 2>&1 | tail -5
+}
+
+# 快捷：取 MaixCAM 图片（原子调 /maixcam/snap，返回保存路径）
+cmd_mc() {
+    env_pre
+    timeout 12 ros2 service call /maixcam/snap std_srvs/srv/Trigger 2>&1 | tail -5
+}
+
 # 快捷：关键服务在线检查
 cmd_svc() {
     env_pre
@@ -251,6 +269,8 @@ case "$cmd" in
     hz) cmd_hz ;;
     oc) cmd_oc ;;
     mq) cmd_mq ;;
+    ms) cmd_ms "${1:-}" ;;
+    mc) cmd_mc ;;
     svc) cmd_svc ;;
     *) usage ;;
 esac

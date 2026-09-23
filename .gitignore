@@ -3,3 +3,5 @@ __pycache__/
 scans.log
 camera.log
 maixcam.log
+snapshots/
+maixcam_latest.jpg
